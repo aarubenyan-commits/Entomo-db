@@ -1,0 +1,80 @@
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import { GoogleMap, LoadScript, Marker } from '@react-google-maps/api';
+import PointForm from './components/PointForm';
+import ImportWizard from './components/ImportWizard';
+
+const API_URL = 'http://127.0.0.1:8000';
+const MAPS_API_KEY = 'AIzaSyBt-bcHW2_VAjETvUFvfaPPLVhhe9Iqr7E';
+
+const mapContainerStyle = { width: '100%', height: '100%' };
+const defaultCenter = { lat: 39.5, lng: 35.0 };
+
+function App() {
+  const [points, setPoints] = useState([]);
+  const [filteredPoints, setFilteredPoints] = useState([]);
+  const [filterYear, setFilterYear] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [editingPoint, setEditingPoint] = useState(null);
+  const [showImport, setShowImport] = useState(false);
+
+  useEffect(() => { fetchPoints(); }, []);
+
+  const fetchPoints = async () => {
+    const res = await axios.get(`${API_URL}/points`);
+    setPoints(res.data);
+    setFilteredPoints(res.data);
+  };
+
+  const applyFilter = (year) => {
+    setFilterYear(year);
+    if (year) {
+      setFilteredPoints(points.filter(p => p.display_date?.includes(year)));
+    } else {
+      setFilteredPoints(points);
+    }
+  };
+
+  return (
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '10px', background: '#2c3e50', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <input type="text" placeholder="Год" value={filterYear} onChange={(e) => applyFilter(e.target.value)} style={{ padding: '5px' }} />
+        <button onClick={() => { setEditingPoint(null); setShowForm(true); }} style={{ background: '#27ae60', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>+ Новая точка</button>
+        <button onClick={() => setShowImport(true)} style={{ background: '#3498db', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Импорт</button>
+        <button onClick={fetchPoints} style={{ background: '#95a5a6', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Обновить</button>
+      </div>
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        <div style={{ width: '40%', overflow: 'auto', background: 'white' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead style={{ background: '#ecf0f1' }}>
+              <tr><th>Место</th><th>Дата</th><th>Сборщик</th><th></th></tr>
+            </thead>
+            <tbody>
+              {filteredPoints.map(p => (
+                <tr key={p.guid} style={{ borderBottom: '1px solid #ccc' }}>
+                  <td style={{ padding: '8px' }}>{p.location_original?.substring(0, 50)}</td>
+                  <td style={{ padding: '8px' }}>{p.display_date}</td>
+                  <td style={{ padding: '8px' }}>{p.collector_name}</td>
+                  <td style={{ padding: '8px' }}>
+                    <button onClick={() => { setEditingPoint(p); setShowForm(true); }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px' }}>✏️</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ width: '60%' }}>
+          <LoadScript googleMapsApiKey={MAPS_API_KEY}>
+            <GoogleMap mapContainerStyle={mapContainerStyle} center={defaultCenter} zoom={6}>
+              {filteredPoints.filter(p => p.latitude).map(p => <Marker key={p.guid} position={{ lat: p.latitude, lng: p.longitude }} />)}
+            </GoogleMap>
+          </LoadScript>
+        </div>
+      </div>
+      {showForm && <PointForm point={editingPoint} onClose={() => { setShowForm(false); setEditingPoint(null); }} onSave={() => { fetchPoints(); setShowForm(false); setEditingPoint(null); }} />}
+      {showImport && <ImportWizard onClose={() => setShowImport(false)} onImport={() => fetchPoints()} />}
+    </div>
+  );
+}
+
+export default App;
