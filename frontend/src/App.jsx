@@ -4,12 +4,16 @@ import { GoogleMap, LoadScript, Marker } from '@react-google-maps/api';
 import { jsPDF } from 'jspdf';
 import QRCode from 'qrcode';
 import PointForm from './components/PointForm';
+import TaxonManager from './components/TaxonManager';
+import CollectorManager from './components/CollectorManager';
+import AdminPanel from './components/AdminPanel';
 
 const API_URL = 'http://127.0.0.1:8000';
 const MAPS_API_KEY = 'AIzaSyBt-bcHW2_VAjETvUFvfaPPLVhhe9Iqr7E';
 
 const mapContainerStyle = { width: '100%', height: '100%' };
 const defaultCenter = { lat: 39.5, lng: 35.0 };
+const libraries = ['places'];
 
 const qrCache = new Map();
 
@@ -55,11 +59,32 @@ function App() {
   const [filterCollector, setFilterCollector] = useState('');
   const [highlightedRows, setHighlightedRows] = useState(new Set());
   const [showForm, setShowForm] = useState(false);
+  const [showCollectorManager, setShowCollectorManager] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [editingPoint, setEditingPoint] = useState(null);
+  const [initialLat, setInitialLat] = useState(null);
+  const [initialLng, setInitialLng] = useState(null);
+  const [showTaxonManager, setShowTaxonManager] = useState(false);
+  const [currentPointGuid, setCurrentPointGuid] = useState(null);
+  const [addPointMode, setAddPointMode] = useState(false);
   const tableBodyRef = useRef(null);
+  const mapRef = useRef(null);
+
+  const centerMapOnPoint = (lat, lng) => {
+    if (mapRef.current) {
+      mapRef.current.panTo({ lat, lng });
+      mapRef.current.setZoom(12);
+    }
+  };
 
   useEffect(() => { fetchData(); }, []);
   useEffect(() => { applyFilters(); }, [points, filterYear, filterMonth, filterDay, filterCollector]);
+
+  useEffect(() => {
+    if (mapRef.current) {
+      mapRef.current.setOptions({ draggableCursor: addPointMode ? 'crosshair' : '' });
+    }
+  }, [addPointMode]);
 
   const fetchData = async () => {
     try {
@@ -106,7 +131,7 @@ function App() {
     }
   };
 
-  const handleRowClick = (guid, event) => {
+  const handleRowClick = (guid, lat, lng, event) => {
     const newHighlighted = new Set(highlightedRows);
     if (event.ctrlKey || event.metaKey) {
       if (newHighlighted.has(guid)) newHighlighted.delete(guid);
@@ -116,9 +141,10 @@ function App() {
       newHighlighted.add(guid);
     }
     setHighlightedRows(newHighlighted);
+    if (lat && lng) centerMapOnPoint(lat, lng);
   };
 
-  const handleMarkerClick = (guid, event) => {
+  const handleMarkerClick = (guid, lat, lng, event) => {
     const newHighlighted = new Set(highlightedRows);
     if (event.ctrlKey || event.metaKey) {
       if (newHighlighted.has(guid)) newHighlighted.delete(guid);
@@ -128,6 +154,7 @@ function App() {
       newHighlighted.add(guid);
     }
     setHighlightedRows(newHighlighted);
+    centerMapOnPoint(lat, lng);
     scrollToRow(guid);
   };
 
@@ -146,80 +173,50 @@ function App() {
   const printLabels = async () => {
     const selected = points.filter(p => selectedQuantities[p.guid]);
     if (selected.length === 0) { alert('Выберите точки'); return; }
-
     for (const point of selected) {
       if (point.latitude && point.longitude) {
         await generateQRDataUrl(`https://www.google.com/maps?q=${point.latitude},${point.longitude}`, 150);
       }
     }
-
     const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
-    const pageWidth = 210;
-    const pageHeight = 297;
-    const labelW = 13.7;
-    const labelH = 7;
-    const margin = 5;
-    const gap = 0.2;
-
+    const pageWidth = 210, pageHeight = 297;
+    const labelW = 13.7, labelH = 7;
+    const margin = 5, gap = 0.2;
     const cols = Math.floor((pageWidth - margin * 2 + gap) / (labelW + gap));
     const rows = Math.floor((pageHeight - margin * 2 + gap) / (labelH + gap));
-
-    let currentRow = 0;
-    let currentCol = 0;
-
+    let currentRow = 0, currentCol = 0;
     for (const point of selected) {
       const quantity = selectedQuantities[point.guid];
       for (let copy = 0; copy < quantity; copy++) {
-        if (currentRow >= rows) {
-          pdf.addPage();
-          currentRow = 0;
-          currentCol = 0;
-        }
-
+        if (currentRow >= rows) { pdf.addPage(); currentRow = 0; currentCol = 0; }
         const x = margin + currentCol * (labelW + gap);
         const y = margin + currentRow * (labelH + gap);
-
         pdf.setDrawColor(0);
         pdf.setLineWidth(0.1);
         pdf.rect(x, y, labelW, labelH);
         pdf.setFillColor(0);
         pdf.circle(x + 0.8, y + 3.5, 0.12, 'F');
-
         pdf.setFontSize(2.8);
         let textY = y + 1.2;
         const textX = x + 1.2;
-
         let locationText = point.location_original || '—';
         if (locationText.length > 35) locationText = locationText.substring(0, 32) + '...';
         const locationLines = pdf.splitTextToSize(locationText, labelW - 2.5);
         locationLines.forEach(line => { pdf.text(line, textX, textY); textY += 0.9; });
-
-        if (point.display_date) {
-          pdf.text(point.display_date, textX, textY);
-          textY += 1.0;
-        }
-
+        if (point.display_date) { pdf.text(point.display_date, textX, textY); textY += 1.0; }
         if (point.latitude_dms && point.longitude_dms) {
           const coordsY = y + labelH - 2.8;
           pdf.text(point.latitude_dms, textX, coordsY);
           pdf.text(point.longitude_dms, textX, coordsY + 1.0);
         }
-
         const qrDataUrl = qrCache.get(`https://www.google.com/maps?q=${point.latitude},${point.longitude}`);
         if (qrDataUrl) {
           const qrSize = 5;
           pdf.addImage(qrDataUrl, 'PNG', x + labelW - qrSize - 0.4, y + labelH - qrSize - 0.4, qrSize, qrSize);
         }
-
-        if (point.collector_name) {
-          pdf.text(point.collector_name, textX, y + labelH - 0.6);
-        }
-
+        if (point.collector_name) { pdf.text(point.collector_name, textX, y + labelH - 0.6); }
         currentCol++;
-        if (currentCol >= cols) {
-          currentCol = 0;
-          currentRow++;
-        }
+        if (currentCol >= cols) { currentCol = 0; currentRow++; }
       }
     }
     pdf.save('labels.pdf');
@@ -230,6 +227,34 @@ function App() {
     if (success) fetchData();
     setShowForm(false);
     setEditingPoint(null);
+    setInitialLat(null);
+    setInitialLng(null);
+  };
+
+  const onLoad = (map) => {
+    mapRef.current = map;
+    map.setOptions({ draggableCursor: addPointMode ? 'crosshair' : '' });
+    map.addListener('click', (event) => {
+      if (addPointMode) {
+        const lat = event.latLng.lat();
+        const lng = event.latLng.lng();
+        setEditingPoint(null);
+        setInitialLat(lat);
+        setInitialLng(lng);
+        setShowForm(true);
+        setAddPointMode(false);
+        map.setOptions({ draggableCursor: '' });
+      }
+    });
+    const searchBox = new window.google.maps.places.SearchBox(document.getElementById('pac-input'));
+    searchBox.addListener('places_changed', () => {
+      const places = searchBox.getPlaces();
+      if (places.length) {
+        const bounds = new window.google.maps.LatLngBounds();
+        places.forEach(place => bounds.extend(place.geometry.location));
+        map.fitBounds(bounds);
+      }
+    });
   };
 
   return (
@@ -245,7 +270,12 @@ function App() {
         <button onClick={selectAll} style={{ background: '#3498db', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Выбрать всё</button>
         <button onClick={resetQuantities} style={{ background: '#e67e22', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Сбросить</button>
         <button onClick={printLabels} style={{ background: '#27ae60', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Печать ({getTotalLabels()})</button>
-        <button onClick={() => { setEditingPoint(null); setShowForm(true); }} style={{ background: '#2ecc71', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>+ Новая точка</button>
+        <button onClick={() => { setEditingPoint(null); setInitialLat(null); setInitialLng(null); setShowForm(true); }} style={{ background: '#2ecc71', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>+ Новая точка</button>
+        <button onClick={() => setAddPointMode(!addPointMode)} style={{ background: addPointMode ? '#e67e22' : '#f39c12', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>
+          {addPointMode ? '🔴 Режим выбора точки' : '📍 Добавить точку на карте'}
+        </button>
+        <button onClick={() => setShowCollectorManager(true)} style={{ background: '#f39c12', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Редактировать сборщиков</button>
+        <button onClick={() => setShowAdminPanel(true)} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Администрирование (граф)</button>
         <div style={{ color: 'white' }}>Точек: {filteredPoints.length}</div>
       </div>
 
@@ -264,7 +294,7 @@ function App() {
               </thead>
               <tbody>
                 {filteredPoints.map(p => (
-                  <tr key={p.guid} data-row-guid={p.guid} onClick={(e) => handleRowClick(p.guid, e)} style={{ backgroundColor: highlightedRows.has(p.guid) ? '#d0e8ff' : 'transparent', cursor: 'pointer' }}>
+                  <tr key={p.guid} data-row-guid={p.guid} onClick={(e) => handleRowClick(p.guid, p.latitude, p.longitude, e)} style={{ backgroundColor: highlightedRows.has(p.guid) ? '#d0e8ff' : 'transparent', cursor: 'pointer' }}>
                     <td style={{ padding: '8px' }}>{p.location_original?.substring(0, 50) || '—'}</td>
                     <td style={{ padding: '8px' }}>{p.display_date || '—'}</td>
                     <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>{p.collector_name || '—'}</td>
@@ -273,6 +303,7 @@ function App() {
                     </td>
                     <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
                       <button onClick={(e) => { e.stopPropagation(); setEditingPoint(p); setShowForm(true); }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', marginRight: '8px' }}>✏️</button>
+                      <button onClick={(e) => { e.stopPropagation(); setCurrentPointGuid(p.guid); setShowTaxonManager(true); }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', marginRight: '8px' }}>📋</button>
                       <button onClick={(e) => handleDeletePoint(p.guid, e)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#e74c3c' }}>🗑️</button>
                     </td>
                   </tr>
@@ -281,23 +312,35 @@ function App() {
             </table>
           </div>
         </div>
-        <div style={{ width: '60%', height: '100%' }}>
-          <LoadScript googleMapsApiKey={MAPS_API_KEY}>
-            <GoogleMap mapContainerStyle={mapContainerStyle} center={defaultCenter} zoom={6}>
+        <div style={{ width: '60%', height: '100%', position: 'relative' }}>
+          <input id="pac-input" type="text" placeholder="Поиск на карте" style={{ position: 'absolute', top: '60px', left: '10px', zIndex: 10, width: '250px', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }} />
+          <LoadScript googleMapsApiKey={MAPS_API_KEY} libraries={libraries}>
+            <GoogleMap
+              mapContainerStyle={mapContainerStyle}
+              center={defaultCenter}
+              zoom={6}
+              onLoad={onLoad}
+            >
               {filteredPoints.filter(p => p.latitude && p.longitude).map(p => (
-                <CustomMarker key={p.guid} position={{ lat: p.latitude, lng: p.longitude }} onClick={(e) => handleMarkerClick(p.guid, e)} isSelected={highlightedRows.has(p.guid)} />
+                <CustomMarker key={p.guid} position={{ lat: p.latitude, lng: p.longitude }} onClick={(e) => handleMarkerClick(p.guid, p.latitude, p.longitude, e)} isSelected={highlightedRows.has(p.guid)} />
               ))}
             </GoogleMap>
           </LoadScript>
         </div>
       </div>
+      
       {showForm && (
         <PointForm
           point={editingPoint}
+          initialLat={initialLat}
+          initialLng={initialLng}
           onClose={() => handleFormSave(false)}
           onSave={handleFormSave}
         />
       )}
+      {showTaxonManager && <TaxonManager pointGuid={currentPointGuid} onClose={() => setShowTaxonManager(false)} />}
+      {showCollectorManager && <CollectorManager onClose={() => setShowCollectorManager(false)} onUpdate={fetchData} />}
+      {showAdminPanel && <AdminPanel onClose={() => setShowAdminPanel(false)} onUpdate={fetchData} />}
     </div>
   );
 }

@@ -6,10 +6,14 @@ import 'react-datepicker/dist/react-datepicker.css';
 
 const API_URL = 'http://127.0.0.1:8000';
 
-const PointForm = ({ point, onClose, onSave }) => {
+const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
   const [formData, setFormData] = useState({
-    latitude: point?.latitude !== undefined && point?.latitude !== null ? point.latitude : '',
-    longitude: point?.longitude !== undefined && point?.longitude !== null ? point.longitude : '',
+    latitude: initialLat !== undefined && initialLat !== null 
+      ? initialLat 
+      : (point?.latitude !== undefined && point?.latitude !== null ? point.latitude : ''),
+    longitude: initialLng !== undefined && initialLng !== null 
+      ? initialLng 
+      : (point?.longitude !== undefined && point?.longitude !== null ? point.longitude : ''),
     location_original: point?.location_original || '',
     date_type: point?.date_start && point?.date_end ? 'range' : (point?.date_start ? 'exact' : 'text'),
     date_start: point?.date_start ? new Date(point.date_start) : null,
@@ -50,7 +54,7 @@ const PointForm = ({ point, onClose, onSave }) => {
     let date_start_str = null, date_end_str = null, date_text_str = null;
     if (formData.date_type === 'exact' && formData.date_start) {
       date_start_str = formData.date_start.toISOString().split('T')[0];
-      date_text_str = formData.date_start.toLocaleDateString('ru-RU'); // DD.MM.YYYY
+      date_text_str = formData.date_start.toLocaleDateString('ru-RU');
     } else if (formData.date_type === 'range') {
       if (formData.date_start) date_start_str = formData.date_start.toISOString().split('T')[0];
       if (formData.date_end) date_end_str = formData.date_end.toISOString().split('T')[0];
