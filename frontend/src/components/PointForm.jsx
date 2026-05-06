@@ -24,6 +24,8 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
   
   const [collectorOptions, setCollectorOptions] = useState([]);
   const [selectedCollector, setSelectedCollector] = useState(null);
+  const [pointTaxa, setPointTaxa] = useState([]);
+  const [showTaxonManager, setShowTaxonManager] = useState(false);
   const [loading, setLoading] = useState(false);
   const [geocoding, setGeocoding] = useState(false);
 
@@ -39,6 +41,15 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
       })
       .catch(err => console.error(err));
   }, []);
+
+  // Загрузка таксонов точки (если редактируем)
+  useEffect(() => {
+    if (point?.guid) {
+      axios.get(`${API_URL}/point_taxa/${point.guid}`)
+        .then(res => setPointTaxa(res.data))
+        .catch(err => console.error(err));
+    }
+  }, [point?.guid]);
 
   const reverseGeocodeNominatim = async (lat, lng) => {
     setGeocoding(true);
@@ -120,6 +131,14 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
       console.error(error);
       alert('Ошибка сохранения');
       setLoading(false);
+    }
+  };
+
+  const handleTaxonAdded = () => {
+    if (point?.guid) {
+      axios.get(`${API_URL}/point_taxa/${point.guid}`)
+        .then(res => setPointTaxa(res.data))
+        .catch(err => console.error(err));
     }
   };
 
@@ -225,11 +244,108 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
             )}
           </div>
           
+          <div style={{ marginBottom: '15px' }}>
+            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Таксоны:</label>
+            {pointTaxa.length === 0 && <p style={{ fontSize: '12px', color: '#666' }}>Нет привязанных таксонов</p>}
+            <ul style={{ margin: '5px 0', paddingLeft: '20px' }}>
+              {pointTaxa.map(t => (
+                <li key={t.guid}>{t.full_name}</li>
+              ))}
+            </ul>
+            <button type="button" onClick={() => setShowTaxonManager(true)} style={{ marginTop: '5px', padding: '4px 8px', fontSize: '12px' }}>
+              📋 Управление таксонами
+            </button>
+          </div>
+          
           <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '20px' }}>
             <button type="button" onClick={() => onSave(false)} style={{ padding: '8px 16px', background: '#95a5a6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Отмена</button>
             <button type="submit" disabled={loading} style={{ padding: '8px 16px', background: '#27ae60', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>{loading ? 'Сохранение...' : 'Сохранить'}</button>
           </div>
         </form>
+      </div>
+      {showTaxonManager && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1200
+        }}>
+          <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', width: '500px', maxHeight: '80vh', overflow: 'auto' }}>
+            <h3>Привязать таксон к точке</h3>
+            <TaxonSelector pointGuid={point?.guid} onSelect={handleTaxonAdded} onClose={() => setShowTaxonManager(false)} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Компонент выбора таксона (поиск + список)
+const TaxonSelector = ({ pointGuid, onSelect, onClose }) => {
+  const [search, setSearch] = useState('');
+  const [results, setResults] = useState([]);
+  const [linkedTaxa, setLinkedTaxa] = useState([]);
+
+  useEffect(() => {
+    if (pointGuid) {
+      axios.get(`${API_URL}/point_taxa/${pointGuid}`)
+        .then(res => setLinkedTaxa(res.data.map(t => t.guid)))
+        .catch(err => console.error(err));
+    }
+  }, [pointGuid]);
+
+  const handleSearch = async () => {
+    if (!search.trim()) return;
+    const res = await axios.get(`${API_URL}/taxa/search?q=${encodeURIComponent(search)}`);
+    setResults(res.data);
+  };
+
+  const handleAdd = async (taxonGuid) => {
+    await axios.post(`${API_URL}/point_taxa/${pointGuid}/${taxonGuid}`);
+    onSelect();
+    setLinkedTaxa([...linkedTaxa, taxonGuid]);
+    setSearch('');
+    setResults([]);
+  };
+
+  const handleCreateNew = async () => {
+    if (!search.trim()) return;
+    const res = await axios.post(`${API_URL}/taxa?genus=${encodeURIComponent(search)}&species=`);
+    const newTaxon = res.data;
+    await axios.post(`${API_URL}/point_taxa/${pointGuid}/${newTaxon.guid}`);
+    onSelect();
+    setLinkedTaxa([...linkedTaxa, newTaxon.guid]);
+    setSearch('');
+    setResults([]);
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+        <input
+          type="text"
+          placeholder="Род или вид..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ flex: 1, padding: '8px' }}
+        />
+        <button onClick={handleSearch}>🔍 Найти</button>
+        <button onClick={handleCreateNew}>➕ Создать новый</button>
+      </div>
+      {results.length > 0 && (
+        <ul style={{ listStyle: 'none', padding: 0, maxHeight: '300px', overflow: 'auto' }}>
+          {results.map(t => (
+            <li key={t.guid} style={{ padding: '8px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>{t.full_name}</span>
+              {linkedTaxa.includes(t.guid) ? (
+                <span style={{ color: 'green' }}>✓ Уже привязан</span>
+              ) : (
+                <button onClick={() => handleAdd(t.guid)}>➕ Привязать</button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div style={{ marginTop: '20px', textAlign: 'right' }}>
+        <button onClick={onClose}>Закрыть</button>
       </div>
     </div>
   );

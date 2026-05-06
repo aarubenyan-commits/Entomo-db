@@ -4,11 +4,22 @@ import { MapContainer, TileLayer, Marker as LeafletMarker, Popup, useMap, useMap
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-delete L.Icon.Default.prototype._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+// Встроенная синяя иконка (Base64)
+const blueIconSvg = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 36'%3E%3Cpath fill='%234285F4' d='M12,0 C5.373,0 0,5.373 0,12 c0,9 12,24 12,24 s12-15 12-24 C24,5.373 18.627,0 12,0 z'/%3E%3Ccircle fill='white' cx='12' cy='12' r='4'/%3E%3C/svg%3E`;
+const redIconSvg = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 36'%3E%3Cpath fill='%23FF0000' d='M12,0 C5.373,0 0,5.373 0,12 c0,9 12,24 12,24 s12-15 12-24 C24,5.373 18.627,0 12,0 z'/%3E%3Ccircle fill='white' cx='12' cy='12' r='4'/%3E%3C/svg%3E`;
+
+const blueIcon = new L.Icon({
+  iconUrl: blueIconSvg,
+  iconSize: [24, 36],
+  iconAnchor: [12, 36],
+  popupAnchor: [0, -30],
+});
+
+const redIcon = new L.Icon({
+  iconUrl: redIconSvg,
+  iconSize: [24, 36],
+  iconAnchor: [12, 36],
+  popupAnchor: [0, -30],
 });
 
 const defaultCenter = { lat: 39.5, lng: 35.0 };
@@ -24,7 +35,6 @@ const ChangeMapView = ({ center, zoom }) => {
   return null;
 };
 
-// Обработчик кликов на OSM (только с Ctrl/Cmd)
 const OSMClickHandler = ({ onMapClick }) => {
   useMapEvents({
     click: (e) => {
@@ -181,20 +191,12 @@ const MapView = ({ points, onMapClick, highlightedRows, onMarkerClick, mapType, 
   const renderOsmMarkers = () => {
     return points.filter(p => p.latitude && p.longitude).map(p => {
       const isSelected = highlightedRows.has(p.guid);
-      const markerColor = isSelected ? 'red' : 'blue';
-      const customIcon = new L.Icon({
-        iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${markerColor}.png`,
-        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
-        iconSize: [25, 41],
-        iconAnchor: [12, 41],
-        popupAnchor: [1, -34],
-        shadowSize: [41, 41]
-      });
+      const icon = isSelected ? redIcon : blueIcon;
       return (
         <LeafletMarker
           key={p.guid}
           position={[p.latitude, p.longitude]}
-          icon={customIcon}
+          icon={icon}
           eventHandlers={{ click: () => onMarkerClick(p.guid, p.latitude, p.longitude) }}
         >
           <Popup>

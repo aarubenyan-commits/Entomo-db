@@ -5,12 +5,12 @@ import { jsPDF } from 'jspdf';
 import QRCode from 'qrcode';
 import PointForm from './components/PointForm';
 import CollectorManager from './components/CollectorManager';
-import TaxonManager from './components/TaxonManager';
 import AdminPanel from './components/AdminPanel';
+import TaxonManager from './components/TaxonManager';
 import MapView from './components/MapView';
 
 const API_URL = 'http://127.0.0.1:8000';
-const MAPS_API_KEY = 'AIzaSyBt-bcHW2_VAjETvUFvfaPPLVhhe9Iqr7E';
+const MAPS_API_KEY = 'AIzaSyBt-bcHW2_VAjETvUFvfaPPLVhhe9Iqr7E'; // Ваш ключ Google
 
 const qrCache = new Map();
 
@@ -209,7 +209,7 @@ function App() {
         <button onClick={printLabels} style={{ background: '#27ae60', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Печать ({getTotalLabels()})</button>
         <button onClick={() => { setEditingPoint(null); setInitialLat(null); setInitialLng(null); setShowForm(true); }} style={{ background: '#2ecc71', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>+ Новая точка</button>
         <button onClick={() => setShowCollectorManager(true)} style={{ background: '#f39c12', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Редактировать сборщиков</button>
-        <button onClick={() => setShowTaxonManagerGlobal(true)} style={{ background: '#3498db', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Редактировать таксоны</button>
+        <button onClick={() => setShowTaxonManagerGlobal(true)} style={{ background: "#3498db", color: "white", border: "none", padding: "5px 15px", borderRadius: "4px", cursor: "pointer" }}>Редактировать таксоны</button>
         <button onClick={() => setShowAdminPanel(true)} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Администрирование (граф)</button>
         
         <div style={{ display: 'flex', gap: '10px', marginLeft: 'auto' }}>
@@ -276,8 +276,8 @@ function App() {
         />
       )}
       {showCollectorManager && <CollectorManager onClose={() => setShowCollectorManager(false)} onUpdate={fetchData} />}
-      {showTaxonManagerGlobal && <TaxonManager onClose={() => setShowTaxonManagerGlobal(false)} onUpdate={fetchData} />}
       {showAdminPanel && <AdminPanel onClose={() => setShowAdminPanel(false)} onUpdate={fetchData} />}
+      {showTaxonManagerGlobal && <TaxonManager onClose={() => setShowTaxonManagerGlobal(false)} onUpdate={fetchData} />}
     </div>
   );
 }
