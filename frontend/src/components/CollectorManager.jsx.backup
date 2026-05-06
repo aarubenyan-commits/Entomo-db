@@ -1,0 +1,91 @@
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import Select from 'react-select';
+
+const API_URL = 'http://127.0.0.1:8000';
+
+const CollectorManager = ({ onClose, onUpdate }) => {
+  const [collectors, setCollectors] = useState([]);
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [newName, setNewName] = useState('');
+
+  const loadCollectors = async () => {
+    const res = await axios.get(`${API_URL}/persons`);
+    setCollectors(res.data);
+  };
+
+  useEffect(() => {
+    loadCollectors();
+  }, []);
+
+  const handleAdd = async () => {
+    if (!newName.trim()) return;
+    await axios.post(`${API_URL}/persons?full_name=${encodeURIComponent(newName)}&role=collector`);
+    setNewName('');
+    loadCollectors();
+  };
+
+  const handleEdit = (guid, name) => {
+    setEditingId(guid);
+    setEditName(name);
+  };
+
+  const handleSave = async (guid) => {
+    if (!editName.trim()) return;
+    await axios.put(`${API_URL}/persons/${guid}?full_name=${encodeURIComponent(editName)}`);
+    setEditingId(null);
+    loadCollectors();
+  };
+
+  const handleDelete = async (guid, name) => {
+    const action = window.confirm(`Удалить сборщика "${name}"? Все связанные точки потеряют сборщика. Заменить на другого?`);
+    let replaceWith = null;
+    if (action) {
+      replaceWith = prompt('Введите имя сборщика, на которого заменить (оставьте пустым для удаления имени из точек):');
+    } else {
+      return;
+    }
+    const url = `${API_URL}/persons/${guid}` + (replaceWith ? `?replace_with=${encodeURIComponent(replaceWith)}` : '');
+    await axios.delete(url);
+    loadCollectors();
+    if (onUpdate) onUpdate();
+  };
+
+  return (
+    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1100 }}>
+      <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', width: '600px', maxHeight: '80vh', overflow: 'auto' }}>
+        <h3>Управление сборщиками</h3>
+        <div>
+          <input type="text" placeholder="Новый сборщик" value={newName} onChange={e => setNewName(e.target.value)} />
+          <button onClick={handleAdd}>➕ Добавить</button>
+        </div>
+        <hr />
+        <ul style={{ listStyle: 'none', padding: 0 }}>
+          {collectors.map(c => (
+            <li key={c.guid} style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+              {editingId === c.guid ? (
+                <>
+                  <input type="text" value={editName} onChange={e => setEditName(e.target.value)} />
+                  <button onClick={() => handleSave(c.guid)}>💾</button>
+                  <button onClick={() => setEditingId(null)}>❌</button>
+                </>
+              ) : (
+                <>
+                  <span>{c.full_name}</span>
+                  <button onClick={() => handleEdit(c.guid, c.full_name)}>✏️</button>
+                  <button onClick={() => handleDelete(c.guid, c.full_name)} style={{ color: 'red' }}>🗑️</button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+        <div style={{ marginTop: '20px', textAlign: 'right' }}>
+          <button onClick={() => { if (onUpdate) onUpdate(); onClose(); }}>Закрыть</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default CollectorManager;

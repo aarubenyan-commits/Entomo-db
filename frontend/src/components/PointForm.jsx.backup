@@ -25,9 +25,7 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
   const [collectorOptions, setCollectorOptions] = useState([]);
   const [selectedCollector, setSelectedCollector] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [geocoding, setGeocoding] = useState(false);
 
-  // Загрузка списка сборщиков
   useEffect(() => {
     axios.get(`${API_URL}/persons`)
       .then(res => {
@@ -39,36 +37,6 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
       })
       .catch(err => console.error(err));
   }, []);
-
-  const reverseGeocodeNominatim = async (lat, lng) => {
-    setGeocoding(true);
-    try {
-      const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`;
-      const response = await fetch(url);
-      const data = await response.json();
-      if (data.display_name) {
-        const address = data.display_name.substring(0, 200);
-        setFormData(prev => ({ ...prev, location_original: address }));
-      } else {
-        alert('Не удалось определить адрес по координатам');
-      }
-    } catch (error) {
-      console.error('Ошибка геокодирования OSM:', error);
-      alert('Ошибка при получении адреса');
-    } finally {
-      setGeocoding(false);
-    }
-  };
-
-  const handleFetchAddress = () => {
-    const lat = parseFloat(formData.latitude);
-    const lng = parseFloat(formData.longitude);
-    if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) {
-      alert('Сначала введите корректные координаты (широту и долготу)');
-      return;
-    }
-    reverseGeocodeNominatim(lat, lng);
-  };
 
   const handleCollectorChange = (selected) => {
     setSelectedCollector(selected);
@@ -177,20 +145,6 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
                 style={{ flex: 1, padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
               />
             </div>
-            <button type="button" onClick={handleFetchAddress} disabled={geocoding} style={{ marginTop: '8px', padding: '4px 8px', fontSize: '12px' }}>
-              {geocoding ? 'Загрузка...' : 'Подтянуть описание с карты'}
-            </button>
-          </div>
-          
-          <div style={{ marginBottom: '15px' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Описание места:</label>
-            <textarea
-              rows="3"
-              value={formData.location_original}
-              onChange={(e) => setFormData({...formData, location_original: e.target.value})}
-              placeholder="Страна, регион, ближайший населённый пункт"
-              style={{ width: '100%', padding: '8px' }}
-            />
           </div>
           
           <div style={{ marginBottom: '15px' }}>
@@ -223,6 +177,17 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
                 style={{ width: '100%', padding: '8px' }}
               />
             )}
+          </div>
+          
+          <div style={{ marginBottom: '15px' }}>
+            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Описание места:</label>
+            <textarea
+              rows="3"
+              value={formData.location_original}
+              onChange={(e) => setFormData({...formData, location_original: e.target.value})}
+              placeholder="Страна, регион, ближайший населённый пункт"
+              style={{ width: '100%', padding: '8px' }}
+            />
           </div>
           
           <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '20px' }}>

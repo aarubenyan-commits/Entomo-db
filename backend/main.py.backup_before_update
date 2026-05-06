@@ -524,60 +524,6 @@ async def import_text(file: UploadFile = File(...)):
     db.close()
     return {"message": f"Импортировано {len(imported)} записей", "imported": imported}
 
-
-@app.put("/points/{guid}")
-def update_point(guid: str, point: PointCreate):
-    db = SessionLocal()
-    now = datetime.now().isoformat()
-    db_point = db.query(Point).filter(Point.guid == guid).first()
-    if not db_point:
-        raise HTTPException(404, "Point not found")
-    
-    # 1. Обновляем поля точки
-    db_point.latitude = point.latitude
-    db_point.longitude = point.longitude
-    db_point.location_original = point.location_original
-    db_point.location_structured = point.location_structured
-    db_point.google_maps_url = point.google_maps_url
-    db_point.date_start = point.date_start
-    db_point.date_end = point.date_end
-    db_point.date_text = point.date_text
-    db_point.updated_at = now
-    
-    # 2. Обновляем связь со сборщиком (удаляем старую, создаём новую)
-    # Найти нового сборщика
-    new_person = db.query(Person).filter(Person.full_name == point.collector_name).first()
-    if not new_person:
-        new_person = Person(full_name=point.collector_name, role="collector", created_at=now, updated_at=now)
-        db.add(new_person)
-        db.flush()
-    
-    # Удалить старую связь
-    db.query(Link).filter(
-        Link.to_guid == guid,
-        Link.from_type == "person",
-        Link.relation_type == "collected_at"
-    ).delete()
-    
-    # Создать новую связь
-    link = Link(
-        from_guid=new_person.guid,
-        to_guid=guid,
-        from_type="person",
-        to_type="point",
-        relation_type="collected_at",
-        direction="one_to_many",
-        is_directed=1,
-        created_at=now,
-        updated_at=now
-    )
-    db.add(link)
-    
-    db.commit()
-    db.close()
-    return {"message": "Updated"}
-
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)

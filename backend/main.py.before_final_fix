@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 from sqlalchemy import create_engine, Column, String, Integer, Float, Text, ForeignKey
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./entomo.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
@@ -16,6 +16,7 @@ Base = declarative_base()
 def generate_uuid():
     return str(uuid.uuid4())
 
+# ========== МОДЕЛИ ==========
 class Person(Base):
     __tablename__ = "persons"
     guid = Column(String, primary_key=True, default=generate_uuid)
@@ -40,6 +41,7 @@ class Point(Base):
     location_author_guid = Column(String, ForeignKey("persons.guid"), nullable=True)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
+    collector_name = Column(String, nullable=True)
 
 class Taxon(Base):
     __tablename__ = "taxa"
@@ -48,6 +50,16 @@ class Taxon(Base):
     species = Column(String, nullable=True)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
+
+class Source(Base):
+    __tablename__ = "sources"
+    guid = Column(String, primary_key=True, default=generate_uuid)
+    source_type = Column(String, nullable=False)
+    file_name = Column(String, nullable=True)
+    content_hash = Column(String, unique=True, nullable=True)
+    import_date = Column(String, nullable=False)
+    user_guid = Column(String, ForeignKey("persons.guid"), nullable=True)
+    extra_data = Column(Text, nullable=True)
 
 class Link(Base):
     __tablename__ = "links"
@@ -69,6 +81,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 def decimal_to_dms(decimal):
     if decimal is None:
         return None
@@ -97,7 +110,7 @@ def convert_roman_date(roman_date):
         return f"{day}.{str(month).zfill(2)}.{year}"
     return roman_date
 
-# ========== ЭНДПОИНТЫ ==========
+# ========== ЭНДПОИНТЫ ДЛЯ ТОЧЕК ==========
 @app.get("/points")
 def get_points():
     db = SessionLocal()
@@ -105,17 +118,6 @@ def get_points():
     result = []
     for p in points:
         lat_dms, lon_dms = format_coordinates(p.latitude, p.longitude)
-        # Получаем сборщика через связь
-        link = db.query(Link).filter(
-            Link.to_guid == p.guid,
-            Link.from_type == "person",
-            Link.relation_type == "collected_at"
-        ).first()
-        collector_name = None
-        if link:
-            person = db.query(Person).filter(Person.guid == link.from_guid).first()
-            if person:
-                collector_name = person.full_name
         result.append({
             "guid": p.guid,
             "latitude": p.latitude,
@@ -124,8 +126,8 @@ def get_points():
             "longitude_dms": lon_dms,
             "location_original": p.location_original,
             "date_text": p.date_text,
-            "display_date": p.date_text,
-            "collector_name": collector_name,
+            "display_date": convert_roman_date(p.date_text) or p.date_text,
+            "collector_name": p.collector_name,
             "date_start": p.date_start,
             "date_end": p.date_end,
         })
@@ -148,11 +150,10 @@ def create_point(point: PointCreate):
     db = SessionLocal()
     now = datetime.now().isoformat()
     
-    # Найти или создать сборщика
-    person = db.query(Person).filter(Person.full_name == point.collector_name).first()
-    if not person:
-        person = Person(full_name=point.collector_name, role="collector", created_at=now, updated_at=now)
-        db.add(person)
+    collector = db.query(Person).filter(Person.full_name == point.collector_name).first()
+    if not collector:
+        collector = Person(full_name=point.collector_name, role="collector", created_at=now, updated_at=now)
+        db.add(collector)
         db.flush()
     
     db_point = Point(
@@ -164,6 +165,7 @@ def create_point(point: PointCreate):
         date_start=point.date_start,
         date_end=point.date_end,
         date_text=point.date_text,
+        collector_name=point.collector_name,
         created_at=now,
         updated_at=now
     )
@@ -171,7 +173,7 @@ def create_point(point: PointCreate):
     db.flush()
     
     link = Link(
-        from_guid=person.guid,
+        from_guid=collector.guid,
         to_guid=db_point.guid,
         from_type="person",
         to_type="point",
@@ -183,7 +185,7 @@ def create_point(point: PointCreate):
     )
     db.add(link)
     
-    point_guid = db_point.guid
+    point_guid = db_point.guid  # Сохраняем ДО закрытия сессии
     db.commit()
     db.close()
     return {"guid": point_guid}
@@ -191,12 +193,9 @@ def create_point(point: PointCreate):
 @app.put("/points/{guid}")
 def update_point(guid: str, point: PointCreate):
     db = SessionLocal()
-    now = datetime.now().isoformat()
     db_point = db.query(Point).filter(Point.guid == guid).first()
     if not db_point:
         raise HTTPException(404, "Point not found")
-    
-    # Обновляем поля точки
     db_point.latitude = point.latitude
     db_point.longitude = point.longitude
     db_point.location_original = point.location_original
@@ -205,39 +204,8 @@ def update_point(guid: str, point: PointCreate):
     db_point.date_start = point.date_start
     db_point.date_end = point.date_end
     db_point.date_text = point.date_text
-    db_point.updated_at = now
-    
-    # Обновляем связь со сборщиком
-    old_link = db.query(Link).filter(
-        Link.to_guid == guid,
-        Link.from_type == "person",
-        Link.relation_type == "collected_at"
-    ).first()
-    
-    new_person = db.query(Person).filter(Person.full_name == point.collector_name).first()
-    if not new_person:
-        new_person = Person(full_name=point.collector_name, role="collector", created_at=now, updated_at=now)
-        db.add(new_person)
-        db.flush()
-    
-    if old_link:
-        if old_link.from_guid != new_person.guid:
-            old_link.from_guid = new_person.guid
-            old_link.updated_at = now
-    else:
-        link = Link(
-            from_guid=new_person.guid,
-            to_guid=guid,
-            from_type="person",
-            to_type="point",
-            relation_type="collected_at",
-            direction="one_to_many",
-            is_directed=1,
-            created_at=now,
-            updated_at=now
-        )
-        db.add(link)
-    
+    db_point.collector_name = point.collector_name
+    db_point.updated_at = datetime.now().isoformat()
     db.commit()
     db.close()
     return {"message": "Updated"}
@@ -251,6 +219,7 @@ def delete_point(guid: str):
     db.close()
     return {"message": "Deleted"}
 
+# ========== ЭНДПОИНТЫ ДЛЯ СБОРЩИКОВ ==========
 @app.get("/persons")
 def get_persons():
     db = SessionLocal()
@@ -287,37 +256,13 @@ def delete_person(guid: str, replace_with: Optional[str] = None):
     person = db.query(Person).filter(Person.guid == guid).first()
     if not person:
         raise HTTPException(404, "Person not found")
-    
-    # Найти точки, связанные с этим сборщиком
-    links = db.query(Link).filter(
-        Link.from_guid == guid,
-        Link.from_type == "person",
-        Link.relation_type == "collected_at"
-    ).all()
-    point_guids = [link.to_guid for link in links]
-    
     if replace_with:
-        # Найти нового сборщика
-        new_person = db.query(Person).filter(Person.full_name == replace_with).first()
-        if not new_person:
-            new_person = Person(full_name=replace_with, role="collector", created_at=datetime.now().isoformat(), updated_at=datetime.now().isoformat())
-            db.add(new_person)
-            db.flush()
-        # Обновить связи
-        for link in links:
-            link.from_guid = new_person.guid
-            link.updated_at = datetime.now().isoformat()
-    else:
-        # Удалить связи
-        for link in links:
-            db.delete(link)
-    
-    # Удалить все другие связи (person -> что-то ещё)
+        db.query(Point).filter(Point.collector_name == person.full_name).update({"collector_name": replace_with})
     db.query(Link).filter((Link.from_guid == guid) | (Link.to_guid == guid)).delete()
     db.delete(person)
     db.commit()
     db.close()
-    return {"message": "Deleted", "affected_points": len(point_guids)}
+    return {"message": "Deleted"}
 
 @app.get("/persons/{guid}/points")
 def get_person_points(guid: str):
@@ -339,7 +284,7 @@ def get_person_points(guid: str):
     db.close()
     return points
 
-# ========== ТАКСОНЫ ==========
+# ========== ЭНДПОИНТЫ ДЛЯ ТАКСОНОВ ==========
 @app.get("/taxa")
 def get_taxa():
     db = SessionLocal()
@@ -358,7 +303,16 @@ def create_taxon(genus: str, species: Optional[str] = None):
     db.close()
     return {"guid": taxon_guid}
 
-# ========== УНИВЕРСАЛЬНЫЕ ЭНДПОИНТЫ ==========
+@app.delete("/taxa/{guid}")
+def delete_taxon(guid: str):
+    db = SessionLocal()
+    db.query(Link).filter((Link.from_guid == guid) | (Link.to_guid == guid)).delete()
+    db.query(Taxon).filter(Taxon.guid == guid).delete()
+    db.commit()
+    db.close()
+    return {"message": "Deleted"}
+
+# ========== УНИВЕРСАЛЬНЫЕ ЭНДПОИНТЫ ДЛЯ АДМИНКИ ==========
 @app.get("/search")
 def search_objects(q: str = "", type: Optional[str] = None, limit: int = 20):
     db = SessionLocal()
@@ -438,7 +392,7 @@ def delete_link(link_guid: str):
     db.close()
     return {"message": "Deleted"}
 
-# ========== ИМПОРТ ==========
+# ========== ИМПОРТ ТЕКСТА ==========
 def parse_collector(text):
     match = re.search(r'leg\.\s+([A-Z]\.?\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', text)
     if match:
@@ -495,18 +449,17 @@ async def import_text(file: UploadFile = File(...)):
             person = Person(full_name=collector, role="collector", created_at=now, updated_at=now)
             db.add(person)
             db.flush()
-        
         point = Point(
             location_original=parsed['location_original'],
             date_text=parsed['date'],
             latitude=parsed['latitude'],
             longitude=parsed['longitude'],
+            collector_name=collector,
             created_at=now,
             updated_at=now
         )
         db.add(point)
         db.flush()
-        
         link = Link(
             from_guid=person.guid,
             to_guid=point.guid,
@@ -523,60 +476,6 @@ async def import_text(file: UploadFile = File(...)):
     db.commit()
     db.close()
     return {"message": f"Импортировано {len(imported)} записей", "imported": imported}
-
-
-@app.put("/points/{guid}")
-def update_point(guid: str, point: PointCreate):
-    db = SessionLocal()
-    now = datetime.now().isoformat()
-    db_point = db.query(Point).filter(Point.guid == guid).first()
-    if not db_point:
-        raise HTTPException(404, "Point not found")
-    
-    # 1. Обновляем поля точки
-    db_point.latitude = point.latitude
-    db_point.longitude = point.longitude
-    db_point.location_original = point.location_original
-    db_point.location_structured = point.location_structured
-    db_point.google_maps_url = point.google_maps_url
-    db_point.date_start = point.date_start
-    db_point.date_end = point.date_end
-    db_point.date_text = point.date_text
-    db_point.updated_at = now
-    
-    # 2. Обновляем связь со сборщиком (удаляем старую, создаём новую)
-    # Найти нового сборщика
-    new_person = db.query(Person).filter(Person.full_name == point.collector_name).first()
-    if not new_person:
-        new_person = Person(full_name=point.collector_name, role="collector", created_at=now, updated_at=now)
-        db.add(new_person)
-        db.flush()
-    
-    # Удалить старую связь
-    db.query(Link).filter(
-        Link.to_guid == guid,
-        Link.from_type == "person",
-        Link.relation_type == "collected_at"
-    ).delete()
-    
-    # Создать новую связь
-    link = Link(
-        from_guid=new_person.guid,
-        to_guid=guid,
-        from_type="person",
-        to_type="point",
-        relation_type="collected_at",
-        direction="one_to_many",
-        is_directed=1,
-        created_at=now,
-        updated_at=now
-    )
-    db.add(link)
-    
-    db.commit()
-    db.close()
-    return {"message": "Updated"}
-
 
 if __name__ == "__main__":
     import uvicorn
