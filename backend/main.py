@@ -8,6 +8,60 @@ from typing import Optional, List
 from sqlalchemy import create_engine, Column, String, Integer, Float, Text, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
+def parse_coordinate_dms(coord_str):
+    """Парсит координаты из строки в десятичные градусы."""
+    if coord_str is None:
+        return None
+    if isinstance(coord_str, (int, float)):
+        return float(coord_str)
+    
+    coord = str(coord_str).strip().upper()
+    coord = coord.replace('"', '').replace('″', '').replace('′', "'")
+    
+    try:
+        return float(coord)
+    except ValueError:
+        pass
+    
+    patterns = [
+        r'(\d{1,3})°(\d{1,2})\'([\d.]+)([NSEW])',
+        r'(\d{1,3})°(\d{1,2})\.([\d.]+)([NSEW])',
+        r'(\d{1,3})°([\d.]+)([NSEW])',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, coord)
+        if match:
+            deg = float(match.group(1))
+            
+            if len(match.groups()) == 4:
+                minutes = float(match.group(2))
+                seconds = float(match.group(3))
+                direction = match.group(4)
+                decimal = deg + minutes / 60 + seconds / 3600
+            elif len(match.groups()) == 3:
+                minutes = float(match.group(2))
+                direction = match.group(3)
+                decimal = deg + minutes / 60
+            else:
+                continue
+            
+            if direction in ['S', 'W']:
+                decimal = -decimal
+            return decimal
+    
+    return None
+
+def parse_coordinate(coord):
+    if coord is None:
+        return None
+    if isinstance(coord, (int, float)):
+        return float(coord)
+    try:
+        return float(str(coord).strip())
+    except:
+        return None
+
 SQLALCHEMY_DATABASE_URL = "sqlite:///./entomo.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -29,6 +83,8 @@ class Point(Base):
     guid = Column(String, primary_key=True, default=generate_uuid)
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
+    latitude_dms = Column(String, nullable=True)
+    longitude_dms = Column(String, nullable=True)
     geocoding_status = Column(String, default="pending")
     date_text = Column(String, nullable=True)
     date_start = Column(String, nullable=True)
@@ -70,6 +126,17 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+# ========== DMS ПАРСИНГ ==========
+@app.post("/parse/dms")
+def parse_dms_endpoint(request_data: dict):
+    dms_string = request_data.get("dms", "")
+    if not dms_string:
+        return {"error": "No DMS string provided"}
+    result = parse_coordinate_dms(dms_string)
+    if result is None:
+        return {"error": "Invalid DMS format", "input": dms_string}
+    return {"decimal": result, "original": dms_string}
+
 def decimal_to_dms(decimal):
     if decimal is None:
         return None
@@ -86,19 +153,20 @@ def format_coordinates(lat, lon):
     lon_dir = "E" if lon >= 0 else "W"
     return f"{decimal_to_dms(lat)}{lat_dir}", f"{decimal_to_dms(lon)}{lon_dir}"
 
-def convert_roman_date(roman_date):
-    if not roman_date:
+def decimal_to_dms_advanced(decimal, is_lat=True):
+    if decimal is None:
         return None
-    roman_map = {'I':1,'II':2,'III':3,'IV':4,'V':5,'VI':6,'VII':7,'VIII':8,'IX':9,'X':10,'XI':11,'XII':12}
-    match = re.search(r'(\d{1,2})\.([IVX]+)\.(\d{4})', roman_date)
-    if match:
-        day = match[1].zfill(2)
-        month = roman_map.get(match[2], 1)
-        year = match[3]
-        return f"{day}.{str(month).zfill(2)}.{year}"
-    return roman_date
+    degrees = int(abs(decimal))
+    minutes_full = (abs(decimal) - degrees) * 60
+    minutes = int(minutes_full)
+    seconds = (minutes_full - minutes) * 60
+    if is_lat:
+        direction = 'N' if decimal >= 0 else 'S'
+    else:
+        direction = 'E' if decimal >= 0 else 'W'
+    return f"{degrees}°{minutes:02d}'{seconds:.1f}{direction}"
 
-# ========== ЭНДПОИНТЫ ==========
+# ========== ТОЧКИ ==========
 @app.get("/points")
 def get_points():
     db = SessionLocal()
@@ -132,6 +200,23 @@ def get_points():
     db.close()
     return result
 
+@app.get("/points/{guid}")
+def get_point(guid: str):
+    db = SessionLocal()
+    point = db.query(Point).filter(Point.guid == guid).first()
+    if not point:
+        raise HTTPException(404, "Point not found")
+    db.close()
+    return {
+        "guid": point.guid,
+        "latitude": point.latitude,
+        "longitude": point.longitude,
+        "location_original": point.location_original,
+        "date_text": point.date_text,
+        "date_start": point.date_start,
+        "date_end": point.date_end,
+    }
+
 class PointCreate(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
@@ -142,19 +227,29 @@ class PointCreate(BaseModel):
     date_end: Optional[str] = None
     date_text: Optional[str] = None
     collector_name: str
+    coord_string: Optional[str] = None
 
 @app.post("/points/create")
 def create_point(point: PointCreate):
     db = SessionLocal()
     now = datetime.now().isoformat()
+    
+    lat = parse_coordinate(point.latitude)
+    lon = parse_coordinate(point.longitude)
+    lat_dms = decimal_to_dms_advanced(lat, is_lat=True) if lat is not None else None
+    lon_dms = decimal_to_dms_advanced(lon, is_lat=False) if lon is not None else None
+    
     person = db.query(Person).filter(Person.full_name == point.collector_name).first()
     if not person:
         person = Person(full_name=point.collector_name, role="collector", created_at=now, updated_at=now)
         db.add(person)
         db.flush()
+    
     db_point = Point(
-        latitude=point.latitude,
-        longitude=point.longitude,
+        latitude=lat,
+        longitude=lon,
+        latitude_dms=lat_dms,
+        longitude_dms=lon_dms,
         location_original=point.location_original,
         location_structured=point.location_structured,
         google_maps_url=point.google_maps_url,
@@ -166,6 +261,7 @@ def create_point(point: PointCreate):
     )
     db.add(db_point)
     db.flush()
+    
     link = Link(
         from_guid=person.guid,
         to_guid=db_point.guid,
@@ -178,6 +274,7 @@ def create_point(point: PointCreate):
         updated_at=now
     )
     db.add(link)
+    
     point_guid = db_point.guid
     db.commit()
     db.close()
@@ -190,8 +287,16 @@ def update_point(guid: str, point: PointCreate):
     db_point = db.query(Point).filter(Point.guid == guid).first()
     if not db_point:
         raise HTTPException(404, "Point not found")
-    db_point.latitude = point.latitude
-    db_point.longitude = point.longitude
+    
+    lat = parse_coordinate(point.latitude)
+    lon = parse_coordinate(point.longitude)
+    lat_dms = decimal_to_dms_advanced(lat, is_lat=True) if lat is not None else None
+    lon_dms = decimal_to_dms_advanced(lon, is_lat=False) if lon is not None else None
+    
+    db_point.latitude = lat
+    db_point.longitude = lon
+    db_point.latitude_dms = lat_dms
+    db_point.longitude_dms = lon_dms
     db_point.location_original = point.location_original
     db_point.location_structured = point.location_structured
     db_point.google_maps_url = point.google_maps_url
@@ -199,16 +304,19 @@ def update_point(guid: str, point: PointCreate):
     db_point.date_end = point.date_end
     db_point.date_text = point.date_text
     db_point.updated_at = now
+    
     new_person = db.query(Person).filter(Person.full_name == point.collector_name).first()
     if not new_person:
         new_person = Person(full_name=point.collector_name, role="collector", created_at=now, updated_at=now)
         db.add(new_person)
         db.flush()
+    
     db.query(Link).filter(
         Link.to_guid == guid,
         Link.from_type == "person",
         Link.relation_type == "collected_at"
     ).delete()
+    
     link = Link(
         from_guid=new_person.guid,
         to_guid=guid,
@@ -234,12 +342,22 @@ def delete_point(guid: str):
     db.close()
     return {"message": "Deleted"}
 
+# ========== СБОРЩИКИ ==========
 @app.get("/persons")
 def get_persons():
     db = SessionLocal()
     persons = db.query(Person).all()
     db.close()
     return [{"guid": p.guid, "full_name": p.full_name, "role": p.role} for p in persons]
+
+@app.get("/persons/{guid}")
+def get_person(guid: str):
+    db = SessionLocal()
+    person = db.query(Person).filter(Person.guid == guid).first()
+    if not person:
+        raise HTTPException(404, "Person not found")
+    db.close()
+    return {"guid": person.guid, "full_name": person.full_name, "role": person.role}
 
 @app.post("/persons")
 def create_person(full_name: str, role: str = "collector"):
@@ -371,13 +489,12 @@ def search_taxa(q: str = ""):
 def get_point_taxa(point_guid: str):
     db = SessionLocal()
     links = db.query(Link).filter(
-        Link.from_guid == point_guid,
-        Link.from_type == "point",
-        Link.relation_type == "has_taxon"
+        Link.to_guid == point_guid,
+        Link.from_type == "taxon"
     ).all()
     taxa = []
     for link in links:
-        taxon = db.query(Taxon).filter(Taxon.guid == link.to_guid).first()
+        taxon = db.query(Taxon).filter(Taxon.guid == link.from_guid).first()
         if taxon:
             taxa.append({
                 "guid": taxon.guid,
@@ -393,19 +510,20 @@ def add_taxon_to_point(point_guid: str, taxon_guid: str):
     db = SessionLocal()
     now = datetime.now().isoformat()
     existing = db.query(Link).filter(
-        Link.from_guid == point_guid,
-        Link.to_guid == taxon_guid,
-        Link.relation_type == "has_taxon"
+        Link.from_guid == taxon_guid,
+        Link.to_guid == point_guid,
+        Link.from_type == "taxon",
+        Link.to_type == "point"
     ).first()
     if existing:
         db.close()
         return {"message": "Already linked"}
     link = Link(
         link_guid=generate_uuid(),
-        from_guid=point_guid,
-        to_guid=taxon_guid,
-        from_type="point",
-        to_type="taxon",
+        from_guid=taxon_guid,
+        to_guid=point_guid,
+        from_type="taxon",
+        to_type="point",
         relation_type="has_taxon",
         direction="many_to_many",
         is_directed=1,
@@ -421,9 +539,10 @@ def add_taxon_to_point(point_guid: str, taxon_guid: str):
 def remove_taxon_from_point(point_guid: str, taxon_guid: str):
     db = SessionLocal()
     link = db.query(Link).filter(
-        Link.from_guid == point_guid,
-        Link.to_guid == taxon_guid,
-        Link.relation_type == "has_taxon"
+        Link.from_guid == taxon_guid,
+        Link.to_guid == point_guid,
+        Link.from_type == "taxon",
+        Link.to_type == "point"
     ).first()
     if link:
         db.delete(link)
@@ -431,7 +550,46 @@ def remove_taxon_from_point(point_guid: str, taxon_guid: str):
     db.close()
     return {"message": "Unlinked"}
 
-# ========== УНИВЕРСАЛЬНЫЕ ЭНДПОИНТЫ ==========
+# ========== ГРАФОВЫЕ ЭНДПОИНТЫ ==========
+@app.get("/objects/{type}/{guid}/links")
+def get_object_links(type: str, guid: str):
+    """Получить все связи объекта по GUID для графа"""
+    db = SessionLocal()
+    try:
+        outgoing = db.query(Link).filter(
+            Link.from_guid == guid,
+            Link.from_type == type
+        ).all()
+        
+        incoming = db.query(Link).filter(
+            Link.to_guid == guid,
+            Link.to_type == type
+        ).all()
+        
+        result = []
+        
+        for link in outgoing:
+            result.append({
+                "link_guid": link.link_guid,
+                "relation_type": link.relation_type,
+                "target_type": link.to_type,
+                "target_guid": link.to_guid,
+                "direction": "outgoing"
+            })
+        
+        for link in incoming:
+            result.append({
+                "link_guid": link.link_guid,
+                "relation_type": link.relation_type,
+                "target_type": link.from_type,
+                "target_guid": link.from_guid,
+                "direction": "incoming"
+            })
+        
+        return result
+    finally:
+        db.close()
+
 @app.get("/search")
 def search_objects(q: str = "", type: Optional[str] = None, limit: int = 20):
     db = SessionLocal()
@@ -447,70 +605,6 @@ def search_objects(q: str = "", type: Optional[str] = None, limit: int = 20):
     db.close()
     return results
 
-@app.get("/objects/{type}/{guid}/links")
-def get_object_links(type: str, guid: str):
-    db = SessionLocal()
-    outgoing = db.query(Link).filter(Link.from_guid == guid, Link.from_type == type).all()
-    incoming = db.query(Link).filter(Link.to_guid == guid, Link.to_type == type).all()
-    def serialize(link, is_outgoing):
-        target_type = link.to_type if is_outgoing else link.from_type
-        target_guid = link.to_guid if is_outgoing else link.from_guid
-        name = None
-        if target_type == "person":
-            obj = db.query(Person).filter(Person.guid == target_guid).first()
-            name = obj.full_name if obj else None
-        elif target_type == "taxon":
-            obj = db.query(Taxon).filter(Taxon.guid == target_guid).first()
-            name = obj.full_name if obj else None
-        return {
-            "link_guid": link.link_guid,
-            "relation_type": link.relation_type,
-            "target_type": target_type,
-            "target_guid": target_guid,
-            "target_name": name,
-            "is_outgoing": is_outgoing
-        }
-    result = [serialize(link, True) for link in outgoing] + [serialize(link, False) for link in incoming]
-    db.close()
-    return result
-
-class LinkCreate(BaseModel):
-    from_guid: str
-    to_guid: str
-    from_type: str
-    to_type: str
-    relation_type: str
-
-@app.post("/links")
-def create_link(link: LinkCreate):
-    db = SessionLocal()
-    now = datetime.now().isoformat()
-    new_link = Link(
-        link_guid=generate_uuid(),
-        from_guid=link.from_guid,
-        to_guid=link.to_guid,
-        from_type=link.from_type,
-        to_type=link.to_type,
-        relation_type=link.relation_type,
-        direction="many_to_many",
-        is_directed=1,
-        created_at=now,
-        updated_at=now
-    )
-    db.add(new_link)
-    db.commit()
-    link_guid = new_link.link_guid
-    db.close()
-    return {"link_guid": link_guid}
-
-@app.delete("/links/{link_guid}")
-def delete_link(link_guid: str):
-    db = SessionLocal()
-    db.query(Link).filter(Link.link_guid == link_guid).delete()
-    db.commit()
-    db.close()
-    return {"message": "Deleted"}
-
 # ========== ИМПОРТ ==========
 def parse_collector(text):
     match = re.search(r'leg\.\s+([A-Z]\.?\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', text)
@@ -524,15 +618,6 @@ def parse_date(text):
         return match.group(1)
     return None
 
-def parse_coordinates(text):
-    pattern = r'N(\d{1,2})°(\d{1,2})\'([\d.]+)"\s+E(\d{1,2})°(\d{1,2})\'([\d.]+)"'
-    match = re.search(pattern, text)
-    if match:
-        lat = float(match.group(1)) + float(match.group(2))/60 + float(match.group(3))/3600
-        lon = float(match.group(4)) + float(match.group(5))/60 + float(match.group(6))/3600
-        return lat, lon
-    return None, None
-
 def parse_location(text):
     cleaned = re.sub(r'N\d{1,2}°\d{1,2}\'.*?"\s+E\d{1,2}°\d{1,2}\'.*?"', '', text)
     cleaned = re.sub(r'\d{1,2}\.\w{1,3}\.?\d{4}', '', cleaned)
@@ -541,7 +626,7 @@ def parse_location(text):
     return cleaned[:200] if cleaned else "Unknown"
 
 def parse_line(line):
-    lat, lon = parse_coordinates(line)
+    lat, lon = parse_coordinate(line)
     return {
         'location_original': parse_location(line),
         'date': parse_date(line),

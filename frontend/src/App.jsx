@@ -7,6 +7,7 @@ import PointForm from './components/PointForm';
 import CollectorManager from './components/CollectorManager';
 import TaxonManager from './components/TaxonManager';
 import AdminPanel from './components/AdminPanel';
+import ImportTextModal from './components/ImportTextModal';
 import MapView from './components/MapView';
 
 const API_URL = 'http://127.0.0.1:8000';
@@ -40,6 +41,7 @@ function App() {
   const [showCollectorManager, setShowCollectorManager] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [showTaxonManagerGlobal, setShowTaxonManagerGlobal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
   const [editingPoint, setEditingPoint] = useState(null);
   const [initialLat, setInitialLat] = useState(null);
   const [initialLng, setInitialLng] = useState(null);
@@ -194,6 +196,11 @@ function App() {
     setShowForm(true);
   };
 
+  const handleImport = () => {
+    fetchData();
+    setShowImportModal(false);
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', margin: 0, padding: 0, overflow: 'hidden' }}>
       <div style={{ display: 'flex', gap: '10px', padding: '10px', background: '#2c3e50', alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
@@ -211,6 +218,7 @@ function App() {
         <button onClick={() => setShowCollectorManager(true)} style={{ background: '#f39c12', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Редактировать сборщиков</button>
         <button onClick={() => setShowTaxonManagerGlobal(true)} style={{ background: '#3498db', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Редактировать таксоны</button>
         <button onClick={() => setShowAdminPanel(true)} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Администрирование (граф)</button>
+        <button onClick={() => setShowImportModal(true)} style={{ background: '#e67e22', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>📂 Импорт текста</button>
         
         <div style={{ display: 'flex', gap: '10px', marginLeft: 'auto' }}>
           <button onClick={() => setMapType('osm')} style={{ background: mapType === 'osm' ? '#2ecc71' : '#95a5a6', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>OpenStreetMap</button>
@@ -278,6 +286,7 @@ function App() {
       {showCollectorManager && <CollectorManager onClose={() => setShowCollectorManager(false)} onUpdate={fetchData} />}
       {showTaxonManagerGlobal && <TaxonManager onClose={() => setShowTaxonManagerGlobal(false)} onUpdate={fetchData} />}
       {showAdminPanel && <AdminPanel onClose={() => setShowAdminPanel(false)} onUpdate={fetchData} />}
+      {showImportModal && <ImportTextModal onClose={() => setShowImportModal(false)} onImport={handleImport} />}
     </div>
   );
 }
