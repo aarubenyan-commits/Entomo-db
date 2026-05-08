@@ -14,26 +14,26 @@ def parse_coordinate_dms(coord_str):
         return None
     if isinstance(coord_str, (int, float)):
         return float(coord_str)
-    
+
     coord = str(coord_str).strip().upper()
     coord = coord.replace('"', '').replace('″', '').replace('′', "'")
-    
+
     try:
         return float(coord)
     except ValueError:
         pass
-    
+
     patterns = [
         r'(\d{1,3})°(\d{1,2})\'([\d.]+)([NSEW])',
         r'(\d{1,3})°(\d{1,2})\.([\d.]+)([NSEW])',
         r'(\d{1,3})°([\d.]+)([NSEW])',
     ]
-    
+
     for pattern in patterns:
         match = re.search(pattern, coord)
         if match:
             deg = float(match.group(1))
-            
+
             if len(match.groups()) == 4:
                 minutes = float(match.group(2))
                 seconds = float(match.group(3))
@@ -45,11 +45,11 @@ def parse_coordinate_dms(coord_str):
                 decimal = deg + minutes / 60
             else:
                 continue
-            
+
             if direction in ['S', 'W']:
                 decimal = -decimal
             return decimal
-    
+
     return None
 
 def parse_coordinate(coord):
@@ -233,18 +233,18 @@ class PointCreate(BaseModel):
 def create_point(point: PointCreate):
     db = SessionLocal()
     now = datetime.now().isoformat()
-    
+
     lat = parse_coordinate(point.latitude)
     lon = parse_coordinate(point.longitude)
     lat_dms = decimal_to_dms_advanced(lat, is_lat=True) if lat is not None else None
     lon_dms = decimal_to_dms_advanced(lon, is_lat=False) if lon is not None else None
-    
+
     person = db.query(Person).filter(Person.full_name == point.collector_name).first()
     if not person:
         person = Person(full_name=point.collector_name, role="collector", created_at=now, updated_at=now)
         db.add(person)
         db.flush()
-    
+
     db_point = Point(
         latitude=lat,
         longitude=lon,
@@ -261,7 +261,7 @@ def create_point(point: PointCreate):
     )
     db.add(db_point)
     db.flush()
-    
+
     link = Link(
         from_guid=person.guid,
         to_guid=db_point.guid,
@@ -274,7 +274,7 @@ def create_point(point: PointCreate):
         updated_at=now
     )
     db.add(link)
-    
+
     point_guid = db_point.guid
     db.commit()
     db.close()
@@ -287,12 +287,12 @@ def update_point(guid: str, point: PointCreate):
     db_point = db.query(Point).filter(Point.guid == guid).first()
     if not db_point:
         raise HTTPException(404, "Point not found")
-    
+
     lat = parse_coordinate(point.latitude)
     lon = parse_coordinate(point.longitude)
     lat_dms = decimal_to_dms_advanced(lat, is_lat=True) if lat is not None else None
     lon_dms = decimal_to_dms_advanced(lon, is_lat=False) if lon is not None else None
-    
+
     db_point.latitude = lat
     db_point.longitude = lon
     db_point.latitude_dms = lat_dms
@@ -304,19 +304,19 @@ def update_point(guid: str, point: PointCreate):
     db_point.date_end = point.date_end
     db_point.date_text = point.date_text
     db_point.updated_at = now
-    
+
     new_person = db.query(Person).filter(Person.full_name == point.collector_name).first()
     if not new_person:
         new_person = Person(full_name=point.collector_name, role="collector", created_at=now, updated_at=now)
         db.add(new_person)
         db.flush()
-    
+
     db.query(Link).filter(
         Link.to_guid == guid,
         Link.from_type == "person",
         Link.relation_type == "collected_at"
     ).delete()
-    
+
     link = Link(
         from_guid=new_person.guid,
         to_guid=guid,
@@ -560,14 +560,14 @@ def get_object_links(type: str, guid: str):
             Link.from_guid == guid,
             Link.from_type == type
         ).all()
-        
+
         incoming = db.query(Link).filter(
             Link.to_guid == guid,
             Link.to_type == type
         ).all()
-        
+
         result = []
-        
+
         for link in outgoing:
             result.append({
                 "link_guid": link.link_guid,
@@ -576,7 +576,7 @@ def get_object_links(type: str, guid: str):
                 "target_guid": link.to_guid,
                 "direction": "outgoing"
             })
-        
+
         for link in incoming:
             result.append({
                 "link_guid": link.link_guid,
@@ -585,7 +585,7 @@ def get_object_links(type: str, guid: str):
                 "target_guid": link.from_guid,
                 "direction": "incoming"
             })
-        
+
         return result
     finally:
         db.close()

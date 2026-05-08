@@ -9,6 +9,7 @@ import TaxonManager from './components/TaxonManager';
 import AdminPanel from './components/AdminPanel';
 import ImportTextModal from './components/ImportTextModal';
 import MapView from './components/MapView';
+import GraphView from './components/GraphView';
 
 const API_URL = 'http://127.0.0.1:8000';
 const MAPS_API_KEY = 'AIzaSyBt-bcHW2_VAjETvUFvfaPPLVhhe9Iqr7E';
@@ -46,6 +47,7 @@ function App() {
   const [initialLat, setInitialLat] = useState(null);
   const [initialLng, setInitialLng] = useState(null);
   const [mapType, setMapType] = useState('osm');
+  const [viewMode, setViewMode] = useState('map');
   const tableBodyRef = useRef(null);
 
   useEffect(() => { fetchData(); }, []);
@@ -203,29 +205,47 @@ function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', margin: 0, padding: 0, overflow: 'hidden' }}>
-      <div style={{ display: 'flex', gap: '10px', padding: '10px', background: '#2c3e50', alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
-        <input type="text" placeholder="Год" value={filterYear} onChange={(e) => setFilterYear(e.target.value)} style={{ padding: '5px', width: '70px' }} />
-        <input type="text" placeholder="Месяц" value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} style={{ padding: '5px', width: '70px' }} />
-        <input type="text" placeholder="День" value={filterDay} onChange={(e) => setFilterDay(e.target.value)} style={{ padding: '5px', width: '70px' }} />
-        <select value={filterCollector} onChange={(e) => setFilterCollector(e.target.value)} style={{ padding: '5px' }}>
-          <option value="">Все сборщики</option>
-          {persons.map(p => (<option key={p.guid} value={p.full_name}>{p.full_name}</option>))}
-        </select>
-        <button onClick={selectAll} style={{ background: '#3498db', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Выбрать всё</button>
-        <button onClick={resetQuantities} style={{ background: '#e67e22', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Сбросить</button>
-        <button onClick={printLabels} style={{ background: '#27ae60', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Печать ({getTotalLabels()})</button>
-        <button onClick={() => { setEditingPoint(null); setInitialLat(null); setInitialLng(null); setShowForm(true); }} style={{ background: '#2ecc71', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>+ Новая точка</button>
-        <button onClick={() => setShowCollectorManager(true)} style={{ background: '#f39c12', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Редактировать сборщиков</button>
-        <button onClick={() => setShowTaxonManagerGlobal(true)} style={{ background: '#3498db', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Редактировать таксоны</button>
-        <button onClick={() => setShowAdminPanel(true)} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Администрирование (граф)</button>
-        <button onClick={() => setShowImportModal(true)} style={{ background: '#e67e22', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>📂 Импорт текста</button>
-        
-        <div style={{ display: 'flex', gap: '10px', marginLeft: 'auto' }}>
-          <button onClick={() => setMapType('osm')} style={{ background: mapType === 'osm' ? '#2ecc71' : '#95a5a6', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>OpenStreetMap</button>
-          <button onClick={() => setMapType('google')} style={{ background: mapType === 'google' ? '#2ecc71' : '#95a5a6', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>Google Maps</button>
+      {/* Верхняя панель - группировка кнопок */}
+      <div style={{ padding: '10px', background: '#2c3e50', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
+          
+          {/* Левая группа - Фильтры */}
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#34495e', padding: '5px 10px', borderRadius: '6px' }}>
+            <span style={{ color: 'white', fontSize: '12px' }}>🔍 Фильтры:</span>
+            <input type="text" placeholder="Год" value={filterYear} onChange={(e) => setFilterYear(e.target.value)} style={{ padding: '4px', width: '60px', borderRadius: '4px', border: 'none' }} />
+            <input type="text" placeholder="Месяц" value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} style={{ padding: '4px', width: '60px', borderRadius: '4px', border: 'none' }} />
+            <input type="text" placeholder="День" value={filterDay} onChange={(e) => setFilterDay(e.target.value)} style={{ padding: '4px', width: '60px', borderRadius: '4px', border: 'none' }} />
+            <select value={filterCollector} onChange={(e) => setFilterCollector(e.target.value)} style={{ padding: '4px', borderRadius: '4px', border: 'none' }}>
+              <option value="">Все сборщики</option>
+              {persons.map(p => (<option key={p.guid} value={p.full_name}>{p.full_name}</option>))}
+            </select>
+          </div>
+          
+          {/* Центральная группа - Действия с точками */}
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#34495e', padding: '5px 10px', borderRadius: '6px' }}>
+            <span style={{ color: 'white', fontSize: '12px' }}📍 Действия:</span>
+            <button onClick={() => { setEditingPoint(null); setInitialLat(null); setInitialLng(null); setShowForm(true); }} style={{ background: '#2ecc71', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>➕ Новая точка</button>
+            <button onClick={selectAll} style={{ background: '#3498db', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>✓ Выбрать всё</button>
+            <button onClick={resetQuantities} style={{ background: '#e67e22', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>⟳ Сбросить</button>
+            <button onClick={printLabels} style={{ background: '#27ae60', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>🖨️ Печать ({getTotalLabels()})</button>
+          </div>
+          
+          {/* Правая группа - Администрирование */}
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#34495e', padding: '5px 10px', borderRadius: '6px' }}>
+            <span style={{ color: 'white', fontSize: '12px' }}⚙️ Администрирование:</span>
+            <button onClick={() => setShowCollectorManager(true)} style={{ background: '#f39c12', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>👥 Сборщики</button>
+            <button onClick={() => setShowTaxonManagerGlobal(true)} style={{ background: '#3498db', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>🔬 Таксоны</button>
+            <button onClick={() => setViewMode(viewMode === 'map' ? 'graph' : 'map')} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>
+              {viewMode === 'map' ? '📊 Переключить на граф' : '🗺️ Переключить на карту'}
+            </button>
+            <button onClick={() => setShowAdminPanel(true)} style={{ background: '#e74c3c', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>📈 Админ-панель</button>
+            <button onClick={() => setShowImportModal(true)} style={{ background: '#1abc9c', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>📂 Импорт текста</button>
+          </div>
+          
+          <div style={{ color: 'white', marginLeft: 'auto', fontSize: '14px', fontWeight: 'bold' }}>
+            📊 Точек: {filteredPoints.length}
+          </div>
         </div>
-        
-        <div style={{ color: 'white' }}>Точек: {filteredPoints.length}</div>
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -261,16 +281,24 @@ function App() {
           </div>
         </div>
         <div style={{ width: '60%', height: '100%', position: 'relative' }}>
-          <LoadScript googleMapsApiKey={MAPS_API_KEY} loadingElement={<div>Загрузка карт...</div>}>
-            <MapView
-              points={filteredPoints}
-              onMapClick={onMapClick}
-              highlightedRows={highlightedRows}
-              onMarkerClick={handleMarkerClick}
-              mapType={mapType}
-              onMapTypeChange={setMapType}
-            />
-          </LoadScript>
+          {viewMode === 'map' ? (
+            <LoadScript googleMapsApiKey={MAPS_API_KEY} loadingElement={<div>Загрузка карт...</div>}>
+              <MapView
+                points={filteredPoints}
+                onMapClick={onMapClick}
+                highlightedRows={highlightedRows}
+                onMarkerClick={handleMarkerClick}
+                mapType={mapType}
+                onMapTypeChange={setMapType}
+              />
+            </LoadScript>
+          ) : (
+            <GraphView onNodeClick={(node) => {
+              if (node.type === 'point') {
+                handleMarkerClick(node.id, node.latitude, node.longitude);
+              }
+            }} onUpdate={fetchData} />
+          )}
         </div>
       </div>
       
