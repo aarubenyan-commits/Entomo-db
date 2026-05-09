@@ -144,7 +144,7 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
       setLatitude(lat);
       setLongitude(lon);
     } else {
-      alert(`Не удалось распарсить координаты:\nШирота: ${latStr}\nДолгота: ${lonStr}`);
+      alert(`Не удалось распознать координаты:\nШирота: ${latStr}\nДолгота: ${lonStr}`);
     }
     
     setLoadingParse(false);
@@ -232,7 +232,7 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
     }
     
     if (latitude === null || longitude === null) {
-      alert('Введите координаты и нажмите кнопку "Парсить"');
+      alert('Введите координаты и нажмите кнопку "Распознать"');
       return;
     }
     
@@ -323,10 +323,10 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
             />
             <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
               <button type="button" onClick={handleParseClick} disabled={loadingParse} style={{ padding: '4px 12px', fontSize: '12px', background: '#2196F3', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                {loadingParse ? '⏳ Парсинг...' : '🔄 Парсить координаты'}
+                {loadingParse ? '⏳ Парсинг...' : '🔄 Распознать координаты'}
               </button>
               <button type="button" onClick={handleFetchAddress} disabled={geocoding} style={{ padding: '4px 12px', fontSize: '12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                {geocoding ? 'Загрузка...' : '📍 Подтянуть описание'}
+                {geocoding ? 'Загрузка...' : '📍 Название населенных пунктов с карты'}
               </button>
             </div>
             {decimalDisplay && (
@@ -342,7 +342,7 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
           </div>
           
           <div style={{ marginBottom: '15px' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Описание места:</label>
+            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Описание точки:</label>
             <textarea
               rows="3"
               value={formData.location_original}

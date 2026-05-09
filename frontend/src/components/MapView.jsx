@@ -3,6 +3,7 @@ import { GoogleMap, Marker } from '@react-google-maps/api';
 import { MapContainer, TileLayer, Marker as LeafletMarker, Popup, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import MapTypeToggle from './MapTypeToggle';
 
 // Встроенная синяя иконка (Base64)
 const blueIconSvg = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 36'%3E%3Cpath fill='%234285F4' d='M12,0 C5.373,0 0,5.373 0,12 c0,9 12,24 12,24 s12-15 12-24 C24,5.373 18.627,0 12,0 z'/%3E%3Ccircle fill='white' cx='12' cy='12' r='4'/%3E%3C/svg%3E`;
@@ -154,10 +155,11 @@ const CustomGoogleMarker = ({ position, onClick, isSelected }) => {
   );
 };
 
-const MapView = ({ points, onMapClick, highlightedRows, onMarkerClick, mapType, onMapTypeChange }) => {
+const MapView = ({ points, onMapClick, highlightedRows, onMarkerClick }) => {
   const leafletMapRef = useRef(null);
   const googleMapRef = useRef(null);
   const [osmLayer, setOsmLayer] = useState('street');
+  const [mapType, setMapType] = useState('osm');
 
   const getTileUrl = () => {
     return osmLayer === 'street'
@@ -222,6 +224,8 @@ const MapView = ({ points, onMapClick, highlightedRows, onMarkerClick, mapType, 
 
   return (
     <div style={{ height: '100%', width: '100%', position: 'relative' }}>
+      <MapTypeToggle mapType={mapType} onMapTypeChange={setMapType} />
+      
       {mapType === 'osm' && (
         <MapContainer
           center={defaultCenter}
