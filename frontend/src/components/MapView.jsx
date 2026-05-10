@@ -5,7 +5,6 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import MapTypeToggle from './MapTypeToggle';
 
-// Встроенная синяя иконка (Base64)
 const blueIconSvg = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 36'%3E%3Cpath fill='%234285F4' d='M12,0 C5.373,0 0,5.373 0,12 c0,9 12,24 12,24 s12-15 12-24 C24,5.373 18.627,0 12,0 z'/%3E%3Ccircle fill='white' cx='12' cy='12' r='4'/%3E%3C/svg%3E`;
 const redIconSvg = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 36'%3E%3Cpath fill='%23FF0000' d='M12,0 C5.373,0 0,5.373 0,12 c0,9 12,24 12,24 s12-15 12-24 C24,5.373 18.627,0 12,0 z'/%3E%3Ccircle fill='white' cx='12' cy='12' r='4'/%3E%3C/svg%3E`;
 
@@ -29,7 +28,7 @@ const defaultZoom = 6;
 const ChangeMapView = ({ center, zoom }) => {
   const map = useMap();
   useEffect(() => {
-    if (center) {
+    if (center && map) {
       map.setView(center, zoom);
     }
   }, [center, zoom, map]);
@@ -104,7 +103,8 @@ const GoogleSearchBox = ({ map }) => {
   const [searchBox, setSearchBox] = useState(null);
 
   useEffect(() => {
-    if (map && window.google && window.google.maps && window.google.maps.places && !searchBox) {
+    if (!map || searchBox) return;
+    if (window.google && window.google.maps && window.google.maps.places) {
       const input = document.createElement('input');
       input.placeholder = 'Поиск на Google Maps...';
       input.style.cssText = `
@@ -119,11 +119,12 @@ const GoogleSearchBox = ({ map }) => {
         border: 1px solid #ccc;
         background: white;
       `;
-      document.getElementById('google-map-container').appendChild(input);
+      const container = document.getElementById('google-map-container');
+      if (container) container.appendChild(input);
       const sb = new window.google.maps.places.SearchBox(input);
       sb.addListener('places_changed', () => {
         const places = sb.getPlaces();
-        if (places.length > 0) {
+        if (places && places.length > 0) {
           const bounds = new window.google.maps.LatLngBounds();
           places.forEach(place => bounds.extend(place.geometry.location));
           map.fitBounds(bounds);

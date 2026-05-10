@@ -12,7 +12,6 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [tableHeight, setTableHeight] = useState(50);
   const [showFilterPopup, setShowFilterPopup] = useState({ column: null, open: false });
-  const [activeFilters, setActiveFilters] = useState({ source: "", link: "", target: "" });
   const [filters, setFilters] = useState({
     source_genus: '',
     source_species: '',
@@ -47,9 +46,10 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
     }
   }, [searchTerm]);
 
-useEffect(() => {
-  applyFilters();
-}, [flatTableData, activeFilters]);
+  useEffect(() => {
+    applyFilters();
+    updateAvailableFilterValues();
+  }, [flatTableData, filters]);
 
   const fetchGraphData = async () => {
     try {
@@ -221,46 +221,21 @@ useEffect(() => {
     });
   };
 
-const applyFilters = () => {
-  console.log('applyFilters called, activeFilters:', activeFilters);
-  console.log('flatTableData length:', flatTableData.length);
-  
-  let filtered = [...flatTableData];
-  
-  // Применяем активные фильтры
-  if (activeFilters.source) {
-    console.log('Filtering by source:', activeFilters.source);
-    filtered = filtered.filter(row => row.source_name === activeFilters.source);
-  }
-  if (activeFilters.link) {
-    console.log('Filtering by link:', activeFilters.link);
-    filtered = filtered.filter(row => (row.link_description || row.link_type) === activeFilters.link);
-  }
-  if (activeFilters.target) {
-    console.log('Filtering by target:', activeFilters.target);
-    filtered = filtered.filter(row => row.target_name === activeFilters.target);
-  }
-  
-  console.log('Filtered data length:', filtered.length);
-  setFilteredData(filtered);
-};
+  const applyFilters = () => {
+    let filtered = [...flatTableData];
+    if (filters.source_genus) filtered = filtered.filter(row => row.source_genus === filters.source_genus);
+    if (filters.source_species) filtered = filtered.filter(row => row.source_species === filters.source_species);
+    if (filters.source_subspecies) filtered = filtered.filter(row => row.source_subspecies === filters.source_subspecies);
+    if (filters.link_type) filtered = filtered.filter(row => row.link_type === filters.link_type);
+    if (filters.target_genus) filtered = filtered.filter(row => row.target_genus === filters.target_genus);
+    if (filters.target_species) filtered = filtered.filter(row => row.target_species === filters.target_species);
+    if (filters.target_subspecies) filtered = filtered.filter(row => row.target_subspecies === filters.target_subspecies);
+    setFilteredData(filtered);
+  };
 
   const handleFilterClick = (column, e) => {
     e.stopPropagation();
-    
-    let values = [];
-    const displayData = filteredData.length > 0 ? filteredData : flatTableData;
-    
-    if (column === 'source_column') {
-      values = [...new Set(displayData.map(row => row.source_name).filter(Boolean))];
-    } else if (column === 'link_column') {
-      values = [...new Set(displayData.map(row => row.link_description || row.link_type).filter(Boolean))];
-    } else if (column === 'target_column') {
-      values = [...new Set(displayData.map(row => row.target_name).filter(Boolean))];
-    }
-    
-    setAvailableFilterValues({ ...availableFilterValues, current_column: values });
-    setShowFilterPopup({ column, open: true, values });
+    setShowFilterPopup({ column, open: true });
   };
 
   const applyColumnFilter = (column, value) => {
@@ -331,22 +306,6 @@ const applyFilters = () => {
     document.addEventListener('mouseup', onMouseUp);
   };
 
-
-const applyColumnFilterValue = (column, value) => {
-  console.log('applyColumnFilterValue called:', column, value);
-  if (!value) {
-    // Сброс фильтра
-    if (column === 'source_column') setActiveFilters(prev => ({ ...prev, source: "" }));
-    else if (column === 'link_column') setActiveFilters(prev => ({ ...prev, link: "" }));
-    else if (column === 'target_column') setActiveFilters(prev => ({ ...prev, target: "" }));
-  } else {
-    if (column === 'source_column') setActiveFilters(prev => ({ ...prev, source: value }));
-    else if (column === 'link_column') setActiveFilters(prev => ({ ...prev, link: value }));
-    else if (column === 'target_column') setActiveFilters(prev => ({ ...prev, target: value }));
-  }
-  setShowFilterPopup({ column: null, open: false });
-};
-
   const renderFilterPopup = () => {
     if (!showFilterPopup.open) return null;
     
@@ -354,17 +313,37 @@ const applyColumnFilterValue = (column, value) => {
     let values = [];
     let title = '';
     
-    if (column === 'source_column') {
-      values = availableFilterValues.current_column || [];
-      title = 'Фильтр по объекту';
-    } else if (column === 'link_column') {
-      values = availableFilterValues.current_column || [];
-      title = 'Фильтр по связи';
-    } else if (column === 'target_column') {
-      values = availableFilterValues.current_column || [];
-      title = 'Фильтр по связанному объекту';
-    } else {
-      return null;
+    switch (column) {
+      case 'source_genus':
+        values = availableFilterValues.source_genus;
+        title = 'Фильтр по роду';
+        break;
+      case 'source_species':
+        values = availableFilterValues.source_species;
+        title = 'Фильтр по виду';
+        break;
+      case 'source_subspecies':
+        values = availableFilterValues.source_subspecies;
+        title = 'Фильтр по подвиду';
+        break;
+      case 'link_type':
+        values = availableFilterValues.link_type;
+        title = 'Фильтр по типу связи';
+        break;
+      case 'target_genus':
+        values = availableFilterValues.target_genus;
+        title = 'Фильтр по роду (связан с)';
+        break;
+      case 'target_species':
+        values = availableFilterValues.target_species;
+        title = 'Фильтр по виду (связан с)';
+        break;
+      case 'target_subspecies':
+        values = availableFilterValues.target_subspecies;
+        title = 'Фильтр по подвиду (связан с)';
+        break;
+      default:
+        return null;
     }
     
     return (
@@ -384,13 +363,13 @@ const applyColumnFilterValue = (column, value) => {
         <h4 style={{ margin: '0 0 10px 0' }}>{title}</h4>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '250px', overflow: 'auto' }}>
           {values.map(value => (
-            <button key={value} onClick={() => applyColumnFilterValue(column, value)} style={{ padding: '5px', textAlign: 'left', cursor: 'pointer' }}>
+            <button key={value} onClick={() => applyColumnFilter(column, value)} style={{ padding: '5px', textAlign: 'left', cursor: 'pointer' }}>
               {value}
             </button>
           ))}
           {values.length === 0 && <div>Нет доступных значений</div>}
           <hr />
-          <button onClick={() => applyColumnFilterValue(column, null)} style={{ color: '#e74c3c' }}>Сбросить фильтр</button>
+          <button onClick={() => clearColumnFilter(column)} style={{ color: '#e74c3c' }}>Сбросить фильтр</button>
         </div>
         <button onClick={() => setShowFilterPopup({ column: null, open: false })} style={{ marginTop: '10px', padding: '5px 10px' }}>Закрыть</button>
       </div>
@@ -417,22 +396,19 @@ const applyColumnFilterValue = (column, value) => {
             <thead style={{ position: 'sticky', top: 0, background: '#f0f0f0', zIndex: 10 }}>
               <tr style={{ borderBottom: '2px solid #a0a0a0' }}>
                 <th style={{ padding: '8px', borderRight: '1px solid #d0d0d0', width: '30%' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span>Объект</span>
-                    <button onClick={(e) => handleFilterClick('source_column', e)} style={{ fontSize: '12px', cursor: 'pointer', padding: '2px 6px' }}>🔽 Фильтр</button>
+                  <div>Объект</div>
+                  <div style={{ display: 'flex', gap: '4px', marginTop: '5px' }}>
+                    <button onClick={(e) => handleFilterClick('source_genus', e)}>Род</button>
+                    <button onClick={(e) => handleFilterClick('source_species', e)}>Вид</button>
+                    <button onClick={(e) => handleFilterClick('source_subspecies', e)}>Подвид</button>
                   </div>
                 </th>
                 <th style={{ padding: '8px', borderRight: '1px solid #d0d0d0', width: '40%' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span>Связь</span>
-                    <button onClick={(e) => handleFilterClick('link_column', e)} style={{ fontSize: '12px', cursor: 'pointer', padding: '2px 6px' }}>🔽 Фильтр</button>
-                  </div>
+                  <div>Связь</div>
+                  <button onClick={(e) => handleFilterClick('link_type', e)} style={{ marginTop: '5px' }}>Тип</button>
                 </th>
                 <th style={{ padding: '8px', width: '30%' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span>Связан с</span>
-                    <button onClick={(e) => handleFilterClick('target_column', e)} style={{ fontSize: '12px', cursor: 'pointer', padding: '2px 6px' }}>🔽 Фильтр</button>
-                  </div>
+                  <div>Связан с</div>
                 </th>
               </tr>
             </thead>

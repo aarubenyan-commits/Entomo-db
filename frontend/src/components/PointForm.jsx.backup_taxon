@@ -391,7 +391,7 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
               <ul style={{ margin: '5px 0', paddingLeft: '20px' }}>
                 {pointTaxa.map(t => (
                   <li key={t.guid}>
-                    {t.display_name || `${t.genus} ${t.species || ''}`}
+                    {t.full_name || `${t.genus} ${t.species || ''}`}
                     <button type="button" onClick={() => removeTaxon(t.guid)} style={{ marginLeft: '10px', color: 'red', fontSize: '12px' }}>✖</button>
                   </li>
                 ))}
@@ -416,7 +416,7 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
                     <ul style={{ marginTop: '10px', paddingLeft: '20px', maxHeight: '150px', overflow: 'auto' }}>
                       {taxonResults.map(t => (
                         <li key={t.guid} style={{ marginBottom: '5px' }}>
-                          {t.display_name || `${t.genus} ${t.species || ''}`}
+                          {t.full_name || `${t.genus} ${t.species || ''}`}
                           {linkedTaxa.includes(t.guid) ? (
                             <span style={{ marginLeft: '10px', color: 'green' }}>✓ Уже привязан</span>
                           ) : (
