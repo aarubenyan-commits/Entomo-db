@@ -1,0 +1,391 @@
+import React, { useEffect, useRef, useState } from 'react';
+import ForceGraph2D from 'react-force-graph-2d';
+import axios from 'axios';
+
+const API_URL = 'http://127.0.0.1:8000';
+
+const GraphView = ({ onUpdate, refreshTrigger }) => {
+  const [graphData, setGraphData] = useState({ nodes: [], links: [] });
+  const [searchTerm, setSearchTerm] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [flatTableData, setFlatTableData] = useState([]);
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [filters, setFilters] = useState({
+    sourceType: '',
+    sourceName: '',
+    linkType: '',
+    targetType: '',
+    targetName: ''
+  });
+  const fgRef = useRef();
+
+  useEffect(() => {
+    fetchGraphData();
+  }, [refreshTrigger]);
+
+  useEffect(() => {
+    if (searchTerm.length >= 2) {
+      handleSearch();
+    } else if (searchTerm.length === 0) {
+      setSearchResults([]);
+      setFlatTableData([]);
+    }
+  }, [searchTerm]);
+
+  useEffect(() => {
+    applyFilters();
+  }, [searchResults, filters]);
+
+  const fetchGraphData = async () => {
+    try {
+      const [pointsRes, personsRes, taxaRes] = await Promise.all([
+        axios.get(`${API_URL}/points`),
+        axios.get(`${API_URL}/persons`),
+        axios.get(`${API_URL}/taxa`)
+      ]);
+
+      const nodes = [];
+      const links = [];
+      const nodeMap = new Map();
+
+      personsRes.data.forEach(p => {
+        nodes.push({ id: p.guid, name: p.full_name, type: 'person', group: 1, full_data: p });
+        nodeMap.set(p.guid, true);
+      });
+
+      taxaRes.data.forEach(t => {
+        nodes.push({ id: t.guid, name: t.full_name, type: 'taxon', group: 3, full_data: t });
+        nodeMap.set(t.guid, true);
+      });
+
+      pointsRes.data.forEach(p => {
+        nodes.push({
+          id: p.guid,
+          name: p.location_original || p.display_date || 'Без названия',
+          type: 'point',
+          group: 2,
+          latitude: p.latitude,
+          longitude: p.longitude,
+          full_data: p
+        });
+        nodeMap.set(p.guid, true);
+
+        if (p.collector_name) {
+          const personNode = personsRes.data.find(person => person.full_name === p.collector_name);
+          if (personNode && nodeMap.has(personNode.guid)) {
+            links.push({ 
+              source: personNode.guid, 
+              target: p.guid, 
+              type: 'collected_at',
+              description: 'Собрана',
+              date: p.date_text || 'дата не указана'
+            });
+          }
+        }
+      });
+
+      for (const point of pointsRes.data) {
+        try {
+          const taxaLinksRes = await axios.get(`${API_URL}/point_taxa/${point.guid}`);
+          taxaLinksRes.data.forEach(taxon => {
+            if (nodeMap.has(taxon.guid)) {
+              links.push({ 
+                source: point.guid, 
+                target: taxon.guid, 
+                type: 'has_taxon',
+                description: 'Содержит таксон'
+              });
+            }
+          });
+        } catch (error) {
+          console.error('Ошибка загрузки таксонов для точки', point.guid);
+        }
+      }
+
+      setGraphData({ nodes, links });
+    } catch (error) {
+      console.error('Ошибка загрузки данных для графа:', error);
+    }
+  };
+
+  const handleSearch = async () => {
+    if (!searchTerm.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    try {
+      const response = await axios.get(`${API_URL}/search?q=${encodeURIComponent(searchTerm)}`);
+      const results = response.data;
+      
+      // Создаём плоскую таблицу: каждая связь = отдельная строка
+      const flatRows = [];
+      
+      for (const result of results) {
+        // Находим связи для этого узла
+        const nodeLinks = graphData.links.filter(link => 
+          link.source.id === result.guid || link.target.id === result.guid
+        );
+        
+        if (nodeLinks.length === 0) {
+          // Узел без связей - добавляем одну строку
+          flatRows.push({
+            source_guid: result.guid,
+            source_name: result.name,
+            source_type: result.type,
+            link_type: null,
+            link_description: null,
+            link_date: null,
+            target_guid: null,
+            target_name: null,
+            target_type: null,
+            direction: null
+          });
+        } else {
+          // Для каждой связи - отдельная строка
+          for (const link of nodeLinks) {
+            const isSource = link.source.id === result.guid;
+            const targetId = isSource ? link.target.id : link.source.id;
+            const targetNode = graphData.nodes.find(n => n.id === targetId);
+            
+            flatRows.push({
+              source_guid: result.guid,
+              source_name: result.name,
+              source_type: result.type,
+              link_type: link.type,
+              link_description: link.description,
+              link_date: link.date,
+              link_guid: link.link_guid,
+              target_guid: targetId,
+              target_name: targetNode?.name || 'Неизвестно',
+              target_type: targetNode?.type || 'unknown',
+              direction: isSource ? '→ исходящая' : '← входящая'
+            });
+          }
+        }
+      }
+      
+      setSearchResults(results);
+      setFlatTableData(flatRows);
+    } catch (error) {
+      console.error('Ошибка поиска:', error);
+    }
+  };
+
+  const applyFilters = () => {
+    let filtered = [...flatTableData];
+    
+    if (filters.sourceType) {
+      filtered = filtered.filter(row => row.source_type === filters.sourceType);
+    }
+    if (filters.sourceName) {
+      filtered = filtered.filter(row => row.source_name.toLowerCase().includes(filters.sourceName.toLowerCase()));
+    }
+    if (filters.linkType) {
+      filtered = filtered.filter(row => row.link_type === filters.linkType);
+    }
+    if (filters.targetType) {
+      filtered = filtered.filter(row => row.target_type === filters.targetType);
+    }
+    if (filters.targetName) {
+      filtered = filtered.filter(row => row.target_name.toLowerCase().includes(filters.targetName.toLowerCase()));
+    }
+    
+    setFilteredData(filtered);
+  };
+
+  const [filteredData, setFilteredData] = useState([]);
+
+  const handleFilterChange = (field, value) => {
+    setFilters(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleRowClick = (row) => {
+    if (row.source_guid) {
+      setSelectedNodeId(row.source_guid);
+      const node = graphData.nodes.find(n => n.id === row.source_guid);
+      if (node && fgRef.current) {
+        fgRef.current.centerAt(node.x, node.y, 1000);
+        fgRef.current.zoom(2, 1000);
+      }
+    }
+  };
+
+  const handleGraphNodeClick = (node) => {
+    setSelectedNodeId(node.id);
+    if (fgRef.current) {
+      fgRef.current.centerAt(node.x, node.y, 1000);
+      fgRef.current.zoom(2, 1000);
+    }
+  };
+
+  const handleDeleteLink = async (linkGuid) => {
+    if (window.confirm('Удалить эту связь?')) {
+      try {
+        await axios.delete(`${API_URL}/links/${linkGuid}`);
+        fetchGraphData();
+        handleSearch();
+        alert('Связь удалена');
+      } catch (error) {
+        console.error('Ошибка удаления связи:', error);
+        alert('Ошибка удаления связи');
+      }
+    }
+  };
+
+  // Получаем уникальные значения для фильтров
+  const uniqueSourceTypes = [...new Set(flatTableData.map(r => r.source_type).filter(Boolean))];
+  const uniqueLinkTypes = [...new Set(flatTableData.map(r => r.link_type).filter(Boolean))];
+  const uniqueTargetTypes = [...new Set(flatTableData.map(r => r.target_type).filter(Boolean))];
+
+  const displayData = filteredData.length > 0 ? filteredData : flatTableData;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
+      <div style={{ height: '50%', borderBottom: '1px solid #ddd', background: '#f9f9f9', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        
+        <div style={{ padding: '10px', background: 'white', borderBottom: '1px solid #e0e0e0' }}>
+          <input
+            type="text"
+            placeholder="Поиск (минимум 2 символа)..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{ width: '100%', padding: '8px', fontSize: '14px', borderRadius: '4px', border: '1px solid #ccc' }}
+          />
+        </div>
+
+        <div style={{ flex: 1, overflow: 'auto', padding: '10px' }}>
+          {displayData.length > 0 ? (
+            <table style={{ 
+              width: '100%', 
+              borderCollapse: 'collapse', 
+              fontSize: '12px',
+              border: '1px solid #d0d0d0'
+            }}>
+              <thead style={{ position: 'sticky', top: 0, background: '#f0f0f0' }}>
+                <tr style={{ borderBottom: '2px solid #a0a0a0' }}>
+                  <th style={{ padding: '8px', borderRight: '1px solid #d0d0d0', width: '25%' }}>
+                    <div>Объект</div>
+                    <input 
+                      type="text" 
+                      placeholder="Фильтр по названию" 
+                      value={filters.sourceName}
+                      onChange={(e) => handleFilterChange('sourceName', e.target.value)}
+                      style={{ marginTop: '5px', padding: '3px', fontSize: '11px', width: '100%', boxSizing: 'border-box' }}
+                    />
+                    <select 
+                      value={filters.sourceType}
+                      onChange={(e) => handleFilterChange('sourceType', e.target.value)}
+                      style={{ marginTop: '3px', padding: '3px', fontSize: '11px', width: '100%' }}
+                    >
+                      <option value="">Все типы</option>
+                      {uniqueSourceTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </th>
+                  <th style={{ padding: '8px', borderRight: '1px solid #d0d0d0', width: '25%' }}>
+                    <div>Связь</div>
+                    <select 
+                      value={filters.linkType}
+                      onChange={(e) => handleFilterChange('linkType', e.target.value)}
+                      style={{ marginTop: '5px', padding: '3px', fontSize: '11px', width: '100%' }}
+                    >
+                      <option value="">Все типы</option>
+                      {uniqueLinkTypes.map(t => <option key={t} value={t}>{t === 'collected_at' ? 'Собрана' : 'Содержит таксон'}</option>)}
+                    </select>
+                  </th>
+                  <th style={{ padding: '8px', borderRight: '1px solid #d0d0d0', width: '30%' }}>
+                    <div>Связан с</div>
+                    <input 
+                      type="text" 
+                      placeholder="Фильтр по названию" 
+                      value={filters.targetName}
+                      onChange={(e) => handleFilterChange('targetName', e.target.value)}
+                      style={{ marginTop: '5px', padding: '3px', fontSize: '11px', width: '100%', boxSizing: 'border-box' }}
+                    />
+                    <select 
+                      value={filters.targetType}
+                      onChange={(e) => handleFilterChange('targetType', e.target.value)}
+                      style={{ marginTop: '3px', padding: '3px', fontSize: '11px', width: '100%' }}
+                    >
+                      <option value="">Все типы</option>
+                      {uniqueTargetTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </th>
+                  <th style={{ padding: '8px', width: '20%' }}>Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {displayData.map((row, idx) => (
+                  <tr 
+                    key={idx}
+                    onClick={() => handleRowClick(row)}
+                    style={{ 
+                      cursor: 'pointer', 
+                      backgroundColor: selectedNodeId === row.source_guid ? '#e3f2fd' : 'white',
+                      borderBottom: '1px solid #e0e0e0'
+                    }}
+                  >
+                    <td style={{ padding: '8px', borderRight: '1px solid #e0e0e0', verticalAlign: 'top' }}>
+                      <strong>{row.source_name}</strong>
+                      <div style={{ fontSize: '10px', color: '#666' }}>({row.source_type})</div>
+                    </td>
+                    <td style={{ padding: '8px', borderRight: '1px solid #e0e0e0', verticalAlign: 'top' }}>
+                      {row.link_type ? (
+                        <>
+                          <div>{row.link_description || row.link_type}</div>
+                          {row.link_date && <div style={{ fontSize: '10px', color: '#666' }}>📅 {row.link_date}</div>}
+                          <div style={{ fontSize: '10px', color: '#888', marginTop: '3px' }}>{row.direction}</div>
+                        </>
+                      ) : (
+                        <span style={{ color: '#999' }}>Нет связей</span>
+                      )}
+                    </td>
+                    <td style={{ padding: '8px', borderRight: '1px solid #e0e0e0', verticalAlign: 'top' }}>
+                      {row.target_name ? (
+                        <>
+                          <strong>{row.target_name}</strong>
+                          <div style={{ fontSize: '10px', color: '#666' }}>({row.target_type})</div>
+                        </>
+                      ) : (
+                        <span style={{ color: '#999' }}>—</span>
+                      )}
+                    </td>
+                    <td style={{ padding: '8px', verticalAlign: 'top' }}>
+                      {row.link_guid && (
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); handleDeleteLink(row.link_guid); }}
+                          style={{ padding: '4px 8px', background: '#e74c3c', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '11px' }}
+                        >
+                          🗑️ Удалить связь
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div style={{ textAlign: 'center', color: '#999', padding: '40px' }}>
+              {searchTerm ? 'Ничего не найдено' : 'Введите поисковый запрос (минимум 2 символа)'}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ height: '50%', position: 'relative', background: 'white' }}>
+        <ForceGraph2D
+          ref={fgRef}
+          graphData={graphData}
+          nodeLabel="name"
+          nodeColor={node => node.group === 1 ? '#3498db' : node.group === 2 ? '#2ecc71' : '#9b59b6'}
+          nodeVal={node => node.type === 'point' ? 3 : 5}
+          onNodeClick={handleGraphNodeClick}
+          cooldownTicks={100}
+          onEngineStop={() => fgRef.current?.zoomToFit(400)}
+        />
+      </div>
+    </div>
+  );
+};
+
+export default GraphView;

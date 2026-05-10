@@ -1,0 +1,346 @@
+import React, { useEffect, useRef, useState } from 'react';
+import ForceGraph2D from 'react-force-graph-2d';
+import axios from 'axios';
+
+const API_URL = 'http://127.0.0.1:8000';
+
+const GraphView = ({ onUpdate, refreshTrigger }) => {
+  const [graphData, setGraphData] = useState({ nodes: [], links: [] });
+  const [searchTerm, setSearchTerm] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [expandedRows, setExpandedRows] = useState(new Set());
+  const fgRef = useRef();
+
+  useEffect(() => {
+    fetchGraphData();
+  }, [refreshTrigger]);
+
+  useEffect(() => {
+    if (searchTerm.length >= 2) {
+      handleSearch();
+    } else if (searchTerm.length === 0) {
+      setSearchResults([]);
+    }
+  }, [searchTerm]);
+
+  const fetchGraphData = async () => {
+    try {
+      const [pointsRes, personsRes, taxaRes] = await Promise.all([
+        axios.get(`${API_URL}/points`),
+        axios.get(`${API_URL}/persons`),
+        axios.get(`${API_URL}/taxa`)
+      ]);
+
+      const nodes = [];
+      const links = [];
+      const nodeMap = new Map();
+
+      personsRes.data.forEach(p => {
+        nodes.push({ id: p.guid, name: p.full_name, type: 'person', group: 1, full_data: p });
+        nodeMap.set(p.guid, true);
+      });
+
+      taxaRes.data.forEach(t => {
+        nodes.push({ id: t.guid, name: t.full_name, type: 'taxon', group: 3, full_data: t });
+        nodeMap.set(t.guid, true);
+      });
+
+      pointsRes.data.forEach(p => {
+        nodes.push({
+          id: p.guid,
+          name: p.location_original || p.display_date || 'Без названия',
+          type: 'point',
+          group: 2,
+          latitude: p.latitude,
+          longitude: p.longitude,
+          full_data: p
+        });
+        nodeMap.set(p.guid, true);
+
+        if (p.collector_name) {
+          const personNode = personsRes.data.find(person => person.full_name === p.collector_name);
+          if (personNode && nodeMap.has(personNode.guid)) {
+            links.push({ 
+              source: personNode.guid, 
+              target: p.guid, 
+              type: 'collected_at',
+              description: 'Собрана',
+              date: p.date_text || 'дата не указана'
+            });
+          }
+        }
+      });
+
+      for (const point of pointsRes.data) {
+        try {
+          const taxaLinksRes = await axios.get(`${API_URL}/point_taxa/${point.guid}`);
+          taxaLinksRes.data.forEach(taxon => {
+            if (nodeMap.has(taxon.guid)) {
+              links.push({ 
+              source: point.guid, 
+              target: taxon.guid, 
+              type: 'has_taxon',
+              description: 'Содержит таксон'
+            });
+            }
+          });
+        } catch (error) {
+          console.error('Ошибка загрузки таксонов для точки', point.guid);
+        }
+      }
+
+      setGraphData({ nodes, links });
+    } catch (error) {
+      console.error('Ошибка загрузки данных для графа:', error);
+    }
+  };
+
+  const handleSearch = async () => {
+    if (!searchTerm.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    try {
+      const response = await axios.get(`${API_URL}/search?q=${encodeURIComponent(searchTerm)}`);
+      const results = response.data;
+      
+      // Обогащаем результаты связями
+      const enrichedResults = await Promise.all(results.map(async (result) => {
+        // Находим связи для этого узла
+        const nodeLinks = graphData.links.filter(link => 
+          link.source.id === result.guid || link.target.id === result.guid
+        );
+        
+        // Для каждой связи находим связанный узел
+        const linksWithNodes = await Promise.all(nodeLinks.map(async (link) => {
+          const isSource = link.source.id === result.guid;
+          const targetId = isSource ? link.target.id : link.source.id;
+          const targetNode = graphData.nodes.find(n => n.id === targetId);
+          
+          let targetName = targetNode?.name || 'Неизвестно';
+          let targetType = targetNode?.type || 'unknown';
+          
+          return {
+            link_guid: link.link_guid,
+            type: link.type,
+            description: link.description,
+            date: link.date,
+            target_id: targetId,
+            target_name: targetName,
+            target_type: targetType,
+            direction: isSource ? 'outgoing' : 'incoming'
+          };
+        }));
+        
+        return {
+          ...result,
+          links: linksWithNodes
+        };
+      }));
+      
+      setSearchResults(enrichedResults);
+    } catch (error) {
+      console.error('Ошибка поиска:', error);
+    }
+  };
+
+  const handleRowClick = (result) => {
+    const node = graphData.nodes.find(n => n.id === result.guid);
+    if (node && fgRef.current) {
+      setSelectedNodeId(result.guid);
+      fgRef.current.centerAt(node.x, node.y, 1000);
+      fgRef.current.zoom(2, 1000);
+    }
+  };
+
+  const handleGraphNodeClick = (node) => {
+    handleRowClick({ guid: node.id, name: node.name, type: node.type });
+  };
+
+  const toggleExpand = (guid) => {
+    const newExpanded = new Set(expandedRows);
+    if (newExpanded.has(guid)) {
+      newExpanded.delete(guid);
+    } else {
+      newExpanded.add(guid);
+    }
+    setExpandedRows(newExpanded);
+  };
+
+  const handleDeleteLink = async (linkGuid, resultGuid) => {
+    if (window.confirm('Удалить эту связь?')) {
+      try {
+        await axios.delete(`${API_URL}/links/${linkGuid}`);
+        // Обновляем данные
+        fetchGraphData();
+        handleSearch();
+        alert('Связь удалена');
+      } catch (error) {
+        console.error('Ошибка удаления связи:', error);
+        alert('Ошибка удаления связи');
+      }
+    }
+  };
+
+  const getNodeDescription = (result) => {
+    const node = graphData.nodes.find(n => n.id === result.guid);
+    if (!node) return result.name;
+    
+    switch (node.type) {
+      case 'point':
+        return `${node.name} | ${node.full_data?.date_text || 'дата не указана'} | ${node.full_data?.collector_name || 'сборщик не указан'}`;
+      case 'person':
+        return `${node.name} (сборщик)`;
+      case 'taxon':
+        return `${node.name} (таксон)`;
+      default:
+        return result.name;
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
+      <div style={{ height: '45%', borderBottom: '1px solid #ddd', background: '#f9f9f9', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        
+        <div style={{ padding: '10px', background: 'white', borderBottom: '1px solid #e0e0e0' }}>
+          <input
+            type="text"
+            placeholder="Поиск (минимум 2 символа)..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{ width: '100%', padding: '8px', fontSize: '14px', borderRadius: '4px', border: '1px solid #ccc' }}
+          />
+        </div>
+
+        <div style={{ flex: 1, overflow: 'auto', padding: '10px' }}>
+          {searchResults.length > 0 ? (
+            <table style={{ 
+              width: '100%', 
+              borderCollapse: 'collapse', 
+              fontSize: '12px',
+              border: '1px solid #d0d0d0'
+            }}>
+              <thead style={{ position: 'sticky', top: 0, background: '#f0f0f0' }}>
+                <tr style={{ borderBottom: '2px solid #a0a0a0' }}>
+                  <th style={{ padding: '10px', textAlign: 'left', borderRight: '1px solid #d0d0d0', width: '35%' }}> 📌 Объект</th>
+                  <th style={{ padding: '10px', textAlign: 'left', borderRight: '1px solid #d0d0d0', width: '35%' }}> 🔗  Связи</th>
+                  <th style={{ padding: '10px', textAlign: 'left', width: '30%' }}> 🔗  Связан с</th>
+                </tr>
+              </thead>
+              <tbody>
+                {searchResults.map(result => (
+                  <React.Fragment key={result.guid}>
+                    <tr 
+                      onClick={() => handleRowClick(result)}
+                      style={{ 
+                        cursor: 'pointer', 
+                        backgroundColor: selectedNodeId === result.guid ? '#e3f2fd' : 'white',
+                        borderBottom: '1px solid #e0e0e0'
+                      }}
+                    >
+                      <td style={{ padding: '8px', borderRight: '1px solid #e0e0e0', verticalAlign: 'top' }}>
+                        <div><strong>{result.name}</strong></div>
+                        <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
+                          Тип: {result.type}<br/>
+                          {getNodeDescription(result)}
+                        </div>
+                      </td>
+                      <td style={{ padding: '8px', borderRight: '1px solid #e0e0e0', verticalAlign: 'top' }}>
+                        {result.links && result.links.length > 0 ? (
+                          <>
+                            <div style={{ marginBottom: '5px', color: '#666', fontSize: '11px' }}>
+                              Всего связей: {result.links.length}
+                            </div>
+                            {result.links.slice(0, expandedRows.has(result.guid) ? undefined : 2).map((link, idx) => (
+                              <div key={idx} style={{ 
+                                marginBottom: '8px', 
+                                padding: '6px', 
+                                background: '#f5f5f5', 
+                                borderRadius: '4px',
+                                fontSize: '11px',
+                                border: '1px solid #e0e0e0'
+                              }}>
+                                <div><strong>{link.description || link.type}</strong></div>
+                                {link.date && <div>📅 {link.date}</div>}
+                                <div style={{ marginTop: '4px' }}>
+                                  <button 
+                                    onClick={(e) => { e.stopPropagation(); handleDeleteLink(link.link_guid, result.guid); }}
+                                    style={{ padding: '2px 6px', background: '#e74c3c', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '10px', marginRight: '5px' }}
+                                  >
+                                      🗑️ Удалить
+                                  </button>
+                                  <button 
+                                    onClick={(e) => { e.stopPropagation(); alert('Редактирование в разработке'); }}
+                                    style={{ padding: '2px 6px', background: '#3498db', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '10px' }}
+                                  >
+                                      ✏️ Редактировать
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                            {result.links.length > 2 && (
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); toggleExpand(result.guid); }}
+                                style={{ marginTop: '5px', padding: '3px 8px', background: '#2ecc71', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '11px' }}
+                              >
+                                {expandedRows.has(result.guid) ? '  ▲ Скрыть' : `  ▼ Показать еще ${result.links.length - 2}`}
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <span style={{ color: '#999' }}>Нет связей</span>
+                        )}
+                      </td>
+                      <td style={{ padding: '8px', verticalAlign: 'top' }}>
+                        {result.links && result.links.length > 0 ? (
+                          result.links.slice(0, expandedRows.has(result.guid) ? undefined : 3).map((link, idx) => (
+                            <div key={idx} style={{ 
+                              marginBottom: '8px', 
+                              padding: '6px', 
+                              background: '#e8f5e9', 
+                              borderRadius: '4px',
+                              border: '1px solid #c8e6c9'
+                            }}>
+                              <div><strong>{link.target_name}</strong></div>
+                              <div style={{ fontSize: '10px', color: '#666' }}>({link.target_type})</div>
+                              <div style={{ fontSize: '10px', color: '#888', marginTop: '3px' }}>
+                                {link.direction === 'outgoing' ? '→ исходящая' : '← входящая'}
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <span style={{ color: '#999' }}>—</span>
+                        )}
+                      </td>
+                    </tr>
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div style={{ textAlign: 'center', color: '#999', padding: '40px' }}>
+              {searchTerm ? 'Ничего не найдено' : 'Введите поисковый запрос (минимум 2 символа)'}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ height: '55%', position: 'relative', background: 'white' }}>
+        <ForceGraph2D
+          ref={fgRef}
+          graphData={graphData}
+          nodeLabel="name"
+          nodeColor={node => node.group === 1 ? '#3498db' : node.group === 2 ? '#2ecc71' : '#9b59b6'}
+          nodeVal={node => node.type === 'point' ? 3 : 5}
+          onNodeClick={handleGraphNodeClick}
+          cooldownTicks={100}
+          onEngineStop={() => fgRef.current?.zoomToFit(400)}
+        />
+      </div>
+    </div>
+  );
+};
+
+export default GraphView;

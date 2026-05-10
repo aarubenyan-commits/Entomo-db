@@ -6,16 +6,36 @@ const API_URL = 'http://127.0.0.1:8000';
 
 const GraphView = ({ onUpdate, refreshTrigger }) => {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] });
-  const [searchResults, setSearchResults] = useState([]);
-  const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterProperty, setFilterProperty] = useState('');
-  const [uniqueProperties, setUniqueProperties] = useState([]);
+  const [flatTableData, setFlatTableData] = useState([]);
+  const [filteredData, setFilteredData] = useState([]);
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [tableHeight, setTableHeight] = useState(50); // проценты
+  const [filters, setFilters] = useState({
+    sourceType: '',
+    linkType: '',
+    targetType: ''
+  });
+  const [showFilterPopup, setShowFilterPopup] = useState({ column: null, open: false });
   const fgRef = useRef();
+  const resizerRef = useRef();
 
   useEffect(() => {
     fetchGraphData();
   }, [refreshTrigger]);
+
+  useEffect(() => {
+    if (searchTerm.length >= 2) {
+      handleSearch();
+    } else if (searchTerm.length === 0) {
+      setFlatTableData([]);
+      setFilteredData([]);
+    }
+  }, [searchTerm]);
+
+  useEffect(() => {
+    applyFilters();
+  }, [flatTableData, filters]);
 
   const fetchGraphData = async () => {
     try {
@@ -30,61 +50,38 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
       const nodeMap = new Map();
 
       personsRes.data.forEach(p => {
-        const node = { 
-          id: p.guid, 
-          name: p.full_name, 
-          type: 'person', 
-          group: 1,
-          full_data: p,
-          properties: [`Сборщик: ${p.full_name}`]
-        };
-        nodes.push(node);
-        nodeMap.set(p.guid, node);
+        nodes.push({ id: p.guid, name: p.full_name, type: 'person', group: 1, full_data: p });
+        nodeMap.set(p.guid, true);
       });
 
       taxaRes.data.forEach(t => {
-        const node = { 
-          id: t.guid, 
-          name: t.full_name, 
-          type: 'taxon', 
-          group: 3,
-          full_data: t,
-          properties: [`Таксон: ${t.full_name}`]
-        };
-        nodes.push(node);
-        nodeMap.set(t.guid, node);
+        nodes.push({ id: t.guid, name: t.full_name, type: 'taxon', group: 3, full_data: t });
+        nodeMap.set(t.guid, true);
       });
 
       pointsRes.data.forEach(p => {
-        const node = {
+        nodes.push({
           id: p.guid,
           name: p.location_original || p.display_date || 'Без названия',
           type: 'point',
           group: 2,
           latitude: p.latitude,
           longitude: p.longitude,
-          full_data: p,
-          properties: [
-            `Место: ${p.location_original || '—'}`,
-            `Дата: ${p.display_date || '—'}`,
-            `Высота: ${p.elevation || '—'} м`
-          ]
-        };
-        nodes.push(node);
-        nodeMap.set(p.guid, node);
+          full_data: p
+        });
+        nodeMap.set(p.guid, true);
 
         if (p.collector_name) {
           const personNode = personsRes.data.find(person => person.full_name === p.collector_name);
           if (personNode && nodeMap.has(personNode.guid)) {
-            const linkProps = [`Сбор: ${p.display_date || 'дата не указана'}`];
-            links.push({
-              source: personNode.guid,
-              target: p.guid,
+            links.push({ 
+              source: personNode.guid, 
+              target: p.guid, 
               type: 'collected_at',
-              properties: linkProps
+              description: 'Собрана',
+              date: p.date_text || 'дата не указана',
+              link_guid: `link_${personNode.guid}_${p.guid}`
             });
-            // Добавляем уникальные свойства для фильтрации
-            setUniqueProperties(prev => [...new Set([...prev, ...linkProps])]);
           }
         }
       });
@@ -94,14 +91,13 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
           const taxaLinksRes = await axios.get(`${API_URL}/point_taxa/${point.guid}`);
           taxaLinksRes.data.forEach(taxon => {
             if (nodeMap.has(taxon.guid)) {
-              const linkProps = [`Содержит таксон: ${taxon.full_name}`];
-              links.push({
-                source: point.guid,
-                target: taxon.guid,
+              links.push({ 
+                source: point.guid, 
+                target: taxon.guid, 
                 type: 'has_taxon',
-                properties: linkProps
+                description: 'Содержит таксон',
+                link_guid: `link_${point.guid}_${taxon.guid}`
               });
-              setUniqueProperties(prev => [...new Set([...prev, ...linkProps])]);
             }
           });
         } catch (error) {
@@ -117,199 +113,355 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
 
   const handleSearch = async () => {
     if (!searchTerm.trim()) {
-      setSearchResults([]);
       return;
     }
 
     try {
       const response = await axios.get(`${API_URL}/search?q=${encodeURIComponent(searchTerm)}`);
-      setSearchResults(response.data);
+      const results = response.data;
       
-      // Подсветка и центрирование на первом найденном узле
-      if (response.data.length > 0 && fgRef.current) {
-        const firstResult = response.data[0];
-        const node = graphData.nodes.find(n => n.id === firstResult.guid);
-        if (node) {
-          fgRef.current.centerAt(node.x, node.y, 1000);
-          fgRef.current.zoom(2, 1000);
-          fgRef.current.nodeColor(candidate =>
-            candidate.id === firstResult.guid ? '#ff0000' : (candidate.group === 1 ? '#3498db' : candidate.group === 2 ? '#2ecc71' : '#9b59b6')
-          );
-          setTimeout(() => {
-            if (fgRef.current) {
-              fgRef.current.nodeColor(node =>
-                node.group === 1 ? '#3498db' : node.group === 2 ? '#2ecc71' : '#9b59b6'
-              );
-            }
-          }, 3000);
+      const flatRows = [];
+      
+      for (const result of results) {
+        const nodeLinks = graphData.links.filter(link => 
+          link.source.id === result.guid || link.target.id === result.guid
+        );
+        
+        if (nodeLinks.length === 0) {
+          flatRows.push({
+            source_guid: result.guid,
+            source_name: result.name,
+            source_type: result.type,
+            link_type: null,
+            link_description: null,
+            link_date: null,
+            link_guid: null,
+            target_guid: null,
+            target_name: null,
+            target_type: null,
+            direction: null
+          });
+        } else {
+          for (const link of nodeLinks) {
+            const isSource = link.source.id === result.guid;
+            const targetId = isSource ? link.target.id : link.source.id;
+            const targetNode = graphData.nodes.find(n => n.id === targetId);
+            
+            flatRows.push({
+              source_guid: result.guid,
+              source_name: result.name,
+              source_type: result.type,
+              link_type: link.type,
+              link_description: link.description,
+              link_date: link.date,
+              link_guid: link.link_guid,
+              target_guid: targetId,
+              target_name: targetNode?.name || 'Неизвестно',
+              target_type: targetNode?.type || 'unknown',
+              direction: isSource ? '→ исходящая' : '← входящая'
+            });
+          }
         }
       }
+      
+      setFlatTableData(flatRows);
     } catch (error) {
       console.error('Ошибка поиска:', error);
     }
   };
 
-  const handleTableRowClick = (result) => {
-    const node = graphData.nodes.find(n => n.id === result.guid);
-    if (node && fgRef.current) {
-      setSelectedNodeId(result.guid);
-      fgRef.current.centerAt(node.x, node.y, 1000);
-      fgRef.current.zoom(2, 1000);
-      
-      // Подсветка выбранного узла и всех связанных
-      const connectedIds = graphData.links
-        .filter(link => link.source.id === result.guid || link.target.id === result.guid)
-        .flatMap(link => [link.source.id, link.target.id]);
-      
-      fgRef.current.nodeColor(candidate => {
-        if (candidate.id === result.guid) return '#ff0000';
-        if (connectedIds.includes(candidate.id)) return '#ffaa00';
-        return candidate.group === 1 ? '#3498db' : candidate.group === 2 ? '#2ecc71' : '#9b59b6';
-      });
-      
-      // Увеличиваем размер связанных узлов
-      fgRef.current.nodeVal(candidate => {
-        if (candidate.id === result.guid) return 8;
-        if (connectedIds.includes(candidate.id)) return 6;
-        return candidate.type === 'point' ? 3 : 5;
-      });
-      
-      // Утолщаем связанные связи
-      fgRef.current.linkWidth(link => {
-        if (link.source.id === result.guid || link.target.id === result.guid) return 3;
-        return 1;
-      });
+  const applyFilters = () => {
+    let filtered = [...flatTableData];
+    
+    if (filters.sourceType) {
+      filtered = filtered.filter(row => row.source_type === filters.sourceType);
+    }
+    if (filters.linkType) {
+      filtered = filtered.filter(row => row.link_type === filters.linkType);
+    }
+    if (filters.targetType) {
+      filtered = filtered.filter(row => row.target_type === filters.targetType);
+    }
+    
+    setFilteredData(filtered);
+  };
+
+  const handleFilterClick = (column, e) => {
+    e.stopPropagation();
+    setShowFilterPopup({ column, open: true });
+  };
+
+  const applyColumnFilter = (column, value) => {
+    setFilters(prev => ({ ...prev, [column]: value }));
+    setShowFilterPopup({ column: null, open: false });
+  };
+
+  const clearColumnFilter = (column) => {
+    setFilters(prev => ({ ...prev, [column]: '' }));
+    setShowFilterPopup({ column: null, open: false });
+  };
+
+  const handleRowClick = (row) => {
+    if (row.source_guid) {
+      setSelectedNodeId(row.source_guid);
+      const node = graphData.nodes.find(n => n.id === row.source_guid);
+      if (node && fgRef.current) {
+        fgRef.current.centerAt(node.x, node.y, 1000);
+        fgRef.current.zoom(2, 1000);
+      }
     }
   };
 
   const handleGraphNodeClick = (node) => {
     setSelectedNodeId(node.id);
-    // Находим результат в поиске или создаём временный
-    const tempResult = { guid: node.id, name: node.name, type: node.type };
-    handleTableRowClick(tempResult);
+    if (fgRef.current) {
+      fgRef.current.centerAt(node.x, node.y, 1000);
+      fgRef.current.zoom(2, 1000);
+    }
   };
 
-  const filterDataByProperty = () => {
-    if (!filterProperty) return graphData;
-    
-    const filteredLinks = graphData.links.filter(link => 
-      link.properties && link.properties.some(prop => prop.includes(filterProperty))
-    );
-    
-    const filteredNodeIds = new Set();
-    filteredLinks.forEach(link => {
-      filteredNodeIds.add(link.source.id);
-      filteredNodeIds.add(link.target.id);
-    });
-    
-    const filteredNodes = graphData.nodes.filter(node => filteredNodeIds.has(node.id));
-    
-    return { nodes: filteredNodes, links: filteredLinks };
+  const handleDeleteLink = async (row, e) => {
+    e.stopPropagation();
+    if (window.confirm('Удалить эту связь?')) {
+      try {
+        if (row.link_type === 'collected_at') {
+          // Для связи сборщик-точка нужно удалить Link из БД
+          // Пока имитируем
+          alert('Удаление связи в разработке');
+        } else {
+          await axios.delete(`${API_URL}/point_taxa/${row.source_guid}/${row.target_guid}`);
+        }
+        fetchGraphData();
+        handleSearch();
+        alert('Связь удалена');
+      } catch (error) {
+        console.error('Ошибка удаления связи:', error);
+        alert('Ошибка удаления связи');
+      }
+    }
   };
 
-  const displayData = filterProperty ? filterDataByProperty() : graphData;
+  const handleEditLink = (row, e) => {
+    e.stopPropagation();
+    alert(`Редактирование связи ${row.link_description} в разработке`);
+  };
+
+  // Получаем уникальные значения для фильтров
+  const uniqueSourceTypes = [...new Set(flatTableData.map(r => r.source_type).filter(Boolean))];
+  const uniqueLinkTypes = [...new Set(flatTableData.map(r => r.link_type).filter(Boolean))];
+  const uniqueTargetTypes = [...new Set(flatTableData.map(r => r.target_type).filter(Boolean))];
+
+  const displayData = filteredData.length > 0 ? filteredData : flatTableData;
+
+  const handleResizeStart = (e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = tableHeight;
+    
+    const onMouseMove = (moveEvent) => {
+      const delta = moveEvent.clientY - startY;
+      const newHeight = startHeight + (delta / window.innerHeight) * 100;
+      setTableHeight(Math.min(80, Math.max(20, newHeight)));
+    };
+    
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+    
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
-      {/* Верхняя панель: поиск + таблица результатов */}
-      <div style={{ height: '35%', borderBottom: '1px solid #ddd', background: '#f9f9f9', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {/* Поисковая строка */}
-        <div style={{ padding: '10px', background: 'white', borderBottom: '1px solid #e0e0e0' }}>
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
-            <input
-              type="text"
-              placeholder="Поиск по названиям, видам, фамилиям..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-              style={{ flex: 1, padding: '8px', fontSize: '14px', borderRadius: '4px', border: '1px solid #ccc' }}
-            />
-            <button onClick={handleSearch} style={{ padding: '8px 16px', background: '#3498db', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-              🔍 Найти
-            </button>
-          </div>
-          
-          {/* Фильтр по свойствам связей */}
-          {uniqueProperties.length > 0 && (
-            <select 
-              value={filterProperty} 
-              onChange={(e) => setFilterProperty(e.target.value)}
-              style={{ padding: '6px', borderRadius: '4px', border: '1px solid #ccc', width: '100%' }}
-            >
-              <option value="">Все связи</option>
-              {uniqueProperties.map(prop => (
-                <option key={prop} value={prop}>{prop}</option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        {/* Таблица результатов Excel-подобная */}
-        <div style={{ flex: 1, overflow: 'auto', padding: '10px' }}>
-          {searchResults.length > 0 ? (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-              <thead style={{ position: 'sticky', top: 0, background: '#f0f0f0' }}>
-                <tr>
-                  <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Тип</th>
-                  <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Название</th>
-                  <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Свойства</th>
-                  <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Связи</th>
-                </tr>
-              </thead>
-              <tbody>
-                {searchResults.map(result => {
-                  const node = graphData.nodes.find(n => n.id === result.guid);
-                  const nodeLinks = graphData.links.filter(l => l.source.id === result.guid || l.target.id === result.guid);
-                  return (
-                    <tr 
-                      key={result.guid} 
-                      onClick={() => handleTableRowClick(result)}
-                      style={{ 
-                        cursor: 'pointer', 
-                        backgroundColor: selectedNodeId === result.guid ? '#e3f2fd' : 'white',
-                        borderBottom: '1px solid #eee'
-                      }}
-                    >
-                      <td style={{ padding: '8px' }}>{result.type}</td>
-                      <td style={{ padding: '8px' }}><strong>{result.name}</strong></td>
-                      <td style={{ padding: '8px', fontSize: '11px' }}>
-                        {node?.properties?.map((prop, i) => <div key={i}>{prop}</div>)}
-                      </td>
-                      <td style={{ padding: '8px', fontSize: '11px' }}>
-                        {nodeLinks.map((link, i) => (
-                          <div key={i}>{link.type === 'collected_at' ? '📦 Собрана' : '🔬 Содержит таксон'}</div>
-                        ))}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          ) : (
-            <div style={{ textAlign: 'center', color: '#999', padding: '40px' }}>
-              Введите поисковый запрос
-            </div>
-          )}
-        </div>
+      {/* Верхняя панель - поиск */}
+      <div style={{ padding: '10px', background: 'white', borderBottom: '1px solid #ddd', flexShrink: 0 }}>
+        <input
+          type="text"
+          placeholder="Поиск (минимум 2 символа)..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          style={{ width: '100%', padding: '8px', fontSize: '14px', borderRadius: '4px', border: '1px solid #ccc' }}
+        />
       </div>
 
-      {/* Нижняя панель: интерактивный граф */}
-      <div style={{ height: '65%', position: 'relative', background: 'white' }}>
+      {/* Таблица результатов */}
+      <div style={{ height: `${tableHeight}%`, overflow: 'auto', borderBottom: '1px solid #ddd', background: '#f9f9f9' }}>
+        {displayData.length > 0 ? (
+          <table style={{ 
+            width: '100%', 
+            borderCollapse: 'collapse', 
+            fontSize: '12px',
+            border: '1px solid #d0d0d0'
+          }}>
+            <thead style={{ position: 'sticky', top: 0, background: '#f0f0f0', zIndex: 10 }}>
+              <tr style={{ borderBottom: '2px solid #a0a0a0' }}>
+                <th style={{ padding: '8px', borderRight: '1px solid #d0d0d0', width: '30%' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>Объект</span>
+                    <span style={{ cursor: 'pointer', fontSize: '14px' }} onClick={(e) => handleFilterClick('sourceType', e)}>⚡</span>
+                  </div>
+                </th>
+                <th style={{ padding: '8px', borderRight: '1px solid #d0d0d0', width: '40%' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>Связь</span>
+                    <span style={{ cursor: 'pointer', fontSize: '14px' }} onClick={(e) => handleFilterClick('linkType', e)}>⚡</span>
+                  </div>
+                </th>
+                <th style={{ padding: '8px', width: '30%' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>Связан с</span>
+                    <span style={{ cursor: 'pointer', fontSize: '14px' }} onClick={(e) => handleFilterClick('targetType', e)}>⚡</span>
+                  </div>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {displayData.map((row, idx) => (
+                <tr 
+                  key={idx}
+                  onClick={() => handleRowClick(row)}
+                  style={{ 
+                    cursor: 'pointer', 
+                    backgroundColor: selectedNodeId === row.source_guid ? '#e3f2fd' : 'white',
+                    borderBottom: '1px solid #e0e0e0'
+                  }}
+                >
+                  <td style={{ padding: '8px', borderRight: '1px solid #e0e0e0', verticalAlign: 'top' }}>
+                    <strong>{row.source_name}</strong>
+                    <div style={{ fontSize: '10px', color: '#666' }}>({row.source_type})</div>
+                  </td>
+                  <td style={{ padding: '8px', borderRight: '1px solid #e0e0e0', verticalAlign: 'top' }}>
+                    {row.link_type ? (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                        <div style={{ flex: 1 }}>
+                          <div>{row.link_description || row.link_type}</div>
+                          {row.link_date && <div style={{ fontSize: '10px', color: '#666' }}>📅 {row.link_date}</div>}
+                          <div style={{ fontSize: '10px', color: '#888', marginTop: '3px' }}>{row.direction}</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '5px' }}>
+                          <button 
+                            onClick={(e) => handleEditLink(row, e)}
+                            style={{ padding: '4px 8px', background: '#3498db', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '11px' }}
+                          >
+                            ✏️
+                          </button>
+                          <button 
+                            onClick={(e) => handleDeleteLink(row, e)}
+                            style={{ padding: '4px 8px', background: '#e74c3c', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '11px' }}
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <span style={{ color: '#999' }}>Нет связей</span>
+                    )}
+                  </td>
+                  <td style={{ padding: '8px', verticalAlign: 'top' }}>
+                    {row.target_name ? (
+                      <>
+                        <strong>{row.target_name}</strong>
+                        <div style={{ fontSize: '10px', color: '#666' }}>({row.target_type})</div>
+                      </>
+                    ) : (
+                      <span style={{ color: '#999' }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ textAlign: 'center', color: '#999', padding: '40px' }}>
+            {searchTerm ? 'Ничего не найдено' : 'Введите поисковый запрос (минимум 2 символа)'}
+          </div>
+        )}
+      </div>
+
+      {/* Ресайзер */}
+      <div 
+        ref={resizerRef}
+        onMouseDown={handleResizeStart}
+        style={{ 
+          height: '5px', 
+          background: '#ccc', 
+          cursor: 'ns-resize',
+          flexShrink: 0,
+          '&:hover': { background: '#999' }
+        }}
+      />
+
+      {/* Граф с тёмным фоном */}
+      <div style={{ height: `${100 - tableHeight}%`, position: 'relative', background: '#1a1a2e' }}>
         <ForceGraph2D
           ref={fgRef}
-          graphData={displayData}
+          graphData={graphData}
           nodeLabel="name"
           nodeColor={node => node.group === 1 ? '#3498db' : node.group === 2 ? '#2ecc71' : '#9b59b6'}
           nodeVal={node => node.type === 'point' ? 3 : 5}
-          nodeRelSize={5}
           onNodeClick={handleGraphNodeClick}
-          linkLabel={link => link.properties?.join(', ') || link.type}
-          linkColor={() => '#999999'}
-          linkWidth={1}
           cooldownTicks={100}
           onEngineStop={() => fgRef.current?.zoomToFit(400)}
+          backgroundColor="#1a1a2e"
         />
       </div>
+
+      {/* Попап фильтрации */}
+      {showFilterPopup.open && (
+        <div style={{
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          background: 'white',
+          border: '1px solid #ccc',
+          borderRadius: '8px',
+          padding: '15px',
+          zIndex: 1000,
+          boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
+          minWidth: '200px'
+        }}>
+          <h4 style={{ margin: '0 0 10px 0' }}>Фильтр</h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {showFilterPopup.column === 'sourceType' && (
+              <>
+                {uniqueSourceTypes.map(type => (
+                  <button key={type} onClick={() => applyColumnFilter('sourceType', type)} style={{ padding: '5px', textAlign: 'left', cursor: 'pointer' }}>
+                    {type}
+                  </button>
+                ))}
+                <hr />
+                <button onClick={() => clearColumnFilter('sourceType')} style={{ padding: '5px', color: '#e74c3c' }}>Сбросить фильтр</button>
+              </>
+            )}
+            {showFilterPopup.column === 'linkType' && (
+              <>
+                {uniqueLinkTypes.map(type => (
+                  <button key={type} onClick={() => applyColumnFilter('linkType', type)} style={{ padding: '5px', textAlign: 'left', cursor: 'pointer' }}>
+                    {type === 'collected_at' ? 'Собрана' : 'Содержит таксон'}
+                  </button>
+                ))}
+                <hr />
+                <button onClick={() => clearColumnFilter('linkType')} style={{ padding: '5px', color: '#e74c3c' }}>Сбросить фильтр</button>
+              </>
+            )}
+            {showFilterPopup.column === 'targetType' && (
+              <>
+                {uniqueTargetTypes.map(type => (
+                  <button key={type} onClick={() => applyColumnFilter('targetType', type)} style={{ padding: '5px', textAlign: 'left', cursor: 'pointer' }}>
+                    {type}
+                  </button>
+                ))}
+                <hr />
+                <button onClick={() => clearColumnFilter('targetType')} style={{ padding: '5px', color: '#e74c3c' }}>Сбросить фильтр</button>
+              </>
+            )}
+          </div>
+          <button onClick={() => setShowFilterPopup({ column: null, open: false })} style={{ marginTop: '10px', padding: '5px 10px', background: '#ccc' }}>Закрыть</button>
+        </div>
+      )}
     </div>
   );
 };
