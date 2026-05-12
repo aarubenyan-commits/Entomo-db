@@ -249,7 +249,7 @@ function App() {
         <div style={{ width: '40%', overflow: 'auto', backgroundColor: 'white', borderRight: '1px solid #ddd' }}>
           <div ref={tableBodyRef} style={{ overflow: 'auto', height: '100%' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-              <thead style={{ backgroundColor: '#ecf0f1', position: 'sticky', top: 0 }}>
+              <thead style={{ backgroundColor: '#e3e5e6', position: 'sticky', top: 0 }}>
                 <tr>
                   <th style={{ padding: '8px' }}>Место</th>
                   <th style={{ padding: '8px' }}>Дата</th>
