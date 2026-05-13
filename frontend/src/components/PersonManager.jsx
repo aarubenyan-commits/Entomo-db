@@ -9,7 +9,7 @@ const PersonManager = ({ persons, onClose, onUpdate }) => {
 
   const handleEdit = (person) => {
     setEditingId(person.guid);
-    setEditName(person.full_name);
+    setEditName(person.display_name);
   };
 
   const handleSave = async (guid) => {
@@ -18,7 +18,7 @@ const PersonManager = ({ persons, onClose, onUpdate }) => {
       return;
     }
     try {
-      await axios.put(`${API_URL}/persons/${guid}`, { full_name: editName });
+      await axios.put(`${API_URL}/persons/${guid}`, { display_name: editName });
       onUpdate();
       setEditingId(null);
     } catch (err) {
@@ -78,7 +78,7 @@ const PersonManager = ({ persons, onClose, onUpdate }) => {
                       style={{ width: '100%', padding: '4px' }}
                     />
                   ) : (
-                    p.full_name
+                    p.display_name
                   )}
                 </td>
                 <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
@@ -90,7 +90,7 @@ const PersonManager = ({ persons, onClose, onUpdate }) => {
                   ) : (
                     <>
                       <button onClick={() => handleEdit(p)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', marginRight: '8px' }}>✏️</button>
-                      <button onClick={() => handleDelete(p.guid, p.full_name)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#e74c3c' }}>🗑️</button>
+                      <button onClick={() => handleDelete(p.guid, p.display_name)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#e74c3c' }}>🗑️</button>
                     </>
                   )}
                 </td>

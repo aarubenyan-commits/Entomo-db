@@ -74,7 +74,6 @@ class Person(Base):
     __tablename__ = "persons"
     guid = Column(String, primary_key=True, default=generate_uuid)
     display_name = Column(String, nullable=False)
-    role = Column(String, nullable=False)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
 
@@ -120,6 +119,18 @@ class Link(Base):
     is_directed = Column(Integer, default=1)
     description = Column(String, nullable=True)
     context = Column(String, nullable=True)
+    created_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
+
+
+
+class Study(Base):
+    __tablename__ = "studies"
+    guid = Column(String, primary_key=True, default=generate_uuid)
+    title = Column(String, nullable=True)  # название исследования
+    url = Column(String, nullable=True)    # ссылка на сайт
+    description = Column(Text, nullable=True)  # краткое описание
+    authors = Column(String, nullable=True)    # автор(ы)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
 
@@ -219,6 +230,14 @@ def get_point(guid: str):
         "date_end": point.date_end,
     }
 
+
+class StudyCreate(BaseModel):
+    title: Optional[str] = None
+    url: Optional[str] = None
+    description: Optional[str] = None
+    authors: Optional[str] = None
+
+
 class PointCreate(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
@@ -240,10 +259,11 @@ def create_point(point: PointCreate):
     lon = parse_coordinate(point.longitude)
     lat_dms = decimal_to_dms_advanced(lat, is_lat=True) if lat is not None else None
     lon_dms = decimal_to_dms_advanced(lon, is_lat=False) if lon is not None else None
+    print(f"DEBUG: lat={lat}, lon={lon}, lat_dms={lat_dms}, lon_dms={lon_dms}")
 
     person = db.query(Person).filter(Person.display_name == point.collector_name).first()
     if not person:
-        person = Person(display_name=point.collector_name, role="collector", created_at=now, updated_at=now)
+        person = Person(display_name=point.collector_name, created_at=now, updated_at=now)
         db.add(person)
         db.flush()
 
@@ -294,6 +314,7 @@ def update_point(guid: str, point: PointCreate):
     lon = parse_coordinate(point.longitude)
     lat_dms = decimal_to_dms_advanced(lat, is_lat=True) if lat is not None else None
     lon_dms = decimal_to_dms_advanced(lon, is_lat=False) if lon is not None else None
+    print(f"DEBUG: lat={lat}, lon={lon}, lat_dms={lat_dms}, lon_dms={lon_dms}")
 
     db_point.latitude = lat
     db_point.longitude = lon
@@ -309,7 +330,7 @@ def update_point(guid: str, point: PointCreate):
 
     new_person = db.query(Person).filter(Person.display_name == point.collector_name).first()
     if not new_person:
-        new_person = Person(display_name=point.collector_name, role="collector", created_at=now, updated_at=now)
+        new_person = Person(display_name=point.collector_name, created_at=now, updated_at=now)
         db.add(new_person)
         db.flush()
 
@@ -350,7 +371,7 @@ def get_persons():
     db = SessionLocal()
     persons = db.query(Person).all()
     db.close()
-    return [{"guid": p.guid, "display_name": p.display_name, "role": p.role} for p in persons]
+    return [{"guid": p.guid, "display_name": p.display_name} for p in persons]
 
 @app.get("/persons/{guid}")
 def get_person(guid: str):
@@ -362,10 +383,10 @@ def get_person(guid: str):
     return {"guid": person.guid, "display_name": person.display_name, "role": person.role}
 
 @app.post("/persons")
-def create_person(display_name: str, role: str = "collector"):
+def create_person(display_name: str):
     db = SessionLocal()
     now = datetime.now().isoformat()
-    person = Person(display_name=display_name, role=role, created_at=now, updated_at=now)
+    person = Person(display_name=display_name, created_at=now, updated_at=now)
     db.add(person)
     db.commit()
     person_guid = person.guid
@@ -399,7 +420,7 @@ def delete_person(guid: str, replace_with: Optional[str] = None):
     if replace_with:
         new_person = db.query(Person).filter(Person.display_name == replace_with).first()
         if not new_person:
-            new_person = Person(display_name=replace_with, role="collector", created_at=datetime.now().isoformat(), updated_at=datetime.now().isoformat())
+            new_person = Person(display_name=replace_with, created_at=datetime.now().isoformat(), updated_at=datetime.now().isoformat())
             db.add(new_person)
             db.flush()
         for link in links:
@@ -661,14 +682,22 @@ async def import_text(file: UploadFile = File(...)):
         collector = parsed['collector']
         person = db.query(Person).filter(Person.display_name == collector).first()
         if not person:
-            person = Person(display_name=collector, role="collector", created_at=now, updated_at=now)
+            person = Person(display_name=collector, created_at=now, updated_at=now)
             db.add(person)
             db.flush()
+        # Вычисляем DMS для импортируемой точки
+        lat = parsed['latitude']
+        lon = parsed['longitude']
+        lat_dms = decimal_to_dms_advanced(lat, is_lat=True) if lat is not None else None
+        lon_dms = decimal_to_dms_advanced(lon, is_lat=False) if lon is not None else None
+        
         point = Point(
             location_original=parsed['location_original'],
             date_text=parsed['date'],
-            latitude=parsed['latitude'],
-            longitude=parsed['longitude'],
+            latitude=lat,
+            longitude=lon,
+            latitude_dms=lat_dms,
+            longitude_dms=lon_dms,
             created_at=now,
             updated_at=now
         )
@@ -704,6 +733,170 @@ def parse_taxon_name(input_name: str):
         "subspecies": parts[2] if len(parts) > 2 else None,
         "display_name": input_name
     }
+
+
+
+# ========== ИССЛЕДОВАНИЯ (STUDY) ==========
+@app.get("/studies")
+def get_studies():
+    db = SessionLocal()
+    studies = db.query(Study).all()
+    db.close()
+    return [{"guid": s.guid, "title": s.title, "url": s.url, "description": s.description, "authors": s.authors, "created_at": s.created_at, "updated_at": s.updated_at} for s in studies]
+
+@app.get("/studies/{guid}")
+def get_study(guid: str):
+    db = SessionLocal()
+    study = db.query(Study).filter(Study.guid == guid).first()
+    if not study:
+        raise HTTPException(404, "Study not found")
+    db.close()
+    return {"guid": study.guid, "title": study.title, "url": study.url, "description": study.description, "authors": study.authors}
+
+@app.post("/studies")
+def create_study(study_data: StudyCreate):
+    db = SessionLocal()
+    now = datetime.now().isoformat()
+    if not study_data.title and not study_data.url:
+        raise HTTPException(400, "Необходимо указать title или url")
+    study = Study(
+        title=study_data.title,
+        url=study_data.url,
+        description=study_data.description,
+        authors=study_data.authors,
+        created_at=now,
+        updated_at=now
+    )
+    db.add(study)
+    db.commit()
+    study_guid = study.guid
+    db.close()
+    return {"guid": study_guid}
+
+@app.put("/studies/{guid}")
+def update_study(guid: str, study_data: StudyCreate):
+    db = SessionLocal()
+    study = db.query(Study).filter(Study.guid == guid).first()
+    if not study:
+        raise HTTPException(404, "Study not found")
+    if study_data.title is not None:
+        study.title = study_data.title
+    if study_data.url is not None:
+        study.url = study_data.url
+    if study_data.description is not None:
+        study.description = study_data.description
+    if study_data.authors is not None:
+        study.authors = study_data.authors
+    study.updated_at = datetime.now().isoformat()
+    db.commit()
+    db.close()
+    return {"message": "Updated"}
+
+@app.delete("/studies/{guid}")
+def delete_study(guid: str):
+    db = SessionLocal()
+    study = db.query(Study).filter(Study.guid == guid).first()
+    if not study:
+        raise HTTPException(404, "Study not found")
+    db.delete(study)
+    db.commit()
+    db.close()
+    return {"message": "Deleted"}
+
+# ========== СВЯЗИ С ИСТОЧНИКАМИ (SOURCE) ==========
+@app.post("/source/{from_type}/{from_guid}/{study_guid}")
+def add_source(from_type: str, from_guid: str, study_guid: str):
+    db = SessionLocal()
+    now = datetime.now().isoformat()
+    
+    if from_type == "person":
+        obj = db.query(Person).filter(Person.guid == from_guid).first()
+    elif from_type == "point":
+        obj = db.query(Point).filter(Point.guid == from_guid).first()
+    elif from_type == "taxon":
+        obj = db.query(Taxon).filter(Taxon.guid == from_guid).first()
+    else:
+        db.close()
+        raise HTTPException(400, "Invalid from_type")
+    
+    if not obj:
+        db.close()
+        raise HTTPException(404, f"{from_type} not found")
+    
+    study = db.query(Study).filter(Study.guid == study_guid).first()
+    if not study:
+        db.close()
+        raise HTTPException(404, "Study not found")
+    
+    existing = db.query(Link).filter(
+        Link.from_guid == from_guid,
+        Link.to_guid == study_guid,
+        Link.from_type == from_type,
+        Link.to_type == "study",
+        Link.relation_type == "source"
+    ).first()
+    
+    if existing:
+        link_guid = existing.link_guid
+        db.close()
+        return {"message": "Source already linked", "link_guid": link_guid}
+    
+    link = Link(
+        link_guid=generate_uuid(),
+        from_guid=from_guid,
+        to_guid=study_guid,
+        from_type=from_type,
+        to_type="study",
+        relation_type="source",
+        direction="many_to_many",
+        is_directed=1,
+        created_at=now,
+        updated_at=now
+    )
+    db.add(link)
+    db.commit()
+    
+    # Получаем link_guid ДО закрытия сессии
+    link_guid = link.link_guid
+    
+    db.close()
+    return {"link_guid": link_guid, "message": "Source linked"}
+
+@app.delete("/source/{link_guid}")
+def remove_source(link_guid: str):
+    db = SessionLocal()
+    link = db.query(Link).filter(Link.link_guid == link_guid).first()
+    if not link:
+        raise HTTPException(404, "Link not found")
+    db.delete(link)
+    db.commit()
+    db.close()
+    return {"message": "Source removed"}
+
+@app.get("/sources/{from_type}/{from_guid}")
+def get_sources(from_type: str, from_guid: str):
+    db = SessionLocal()
+    links = db.query(Link).filter(
+        Link.from_guid == from_guid,
+        Link.from_type == from_type,
+        Link.relation_type == "source"
+    ).all()
+    
+    sources = []
+    for link in links:
+        study = db.query(Study).filter(Study.guid == link.to_guid).first()
+        if study:
+            sources.append({
+                "link_guid": link.link_guid,
+                "study_guid": study.guid,
+                "title": study.title,
+                "url": study.url,
+                "description": study.description,
+                "authors": study.authors
+            })
+    db.close()
+    return sources
+
 
 if __name__ == "__main__":
     import uvicorn

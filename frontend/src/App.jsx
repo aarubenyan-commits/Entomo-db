@@ -5,6 +5,7 @@ import { jsPDF } from 'jspdf';
 import QRCode from 'qrcode';
 import PointForm from './components/PointForm';
 import CollectorManager from './components/CollectorManager';
+import StudyManager from './components/StudyManager';
 import TaxonManager from './components/TaxonManager';
 import ImportTextModal from './components/ImportTextModal';
 import MapView from './components/MapView';
@@ -40,6 +41,7 @@ function App() {
   const [showForm, setShowForm] = useState(false);
   const [showCollectorManager, setShowCollectorManager] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [showStudyManager, setShowStudyManager] = useState(false);
   const [showTaxonManagerGlobal, setShowTaxonManagerGlobal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [editingPoint, setEditingPoint] = useState(null);
@@ -110,10 +112,8 @@ function App() {
   };
 
   const handleMarkerClick = (guid, lat, lng) => {
-    const newHighlighted = new Set(highlightedRows);
-    if (newHighlighted.has(guid)) newHighlighted.delete(guid);
-    else newHighlighted.add(guid);
-    setHighlightedRows(newHighlighted);
+    // На карте может быть выделена только одна точка
+    setHighlightedRows(new Set([guid]));
     scrollToRow(guid);
   };
 
@@ -204,36 +204,33 @@ function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', margin: 0, padding: 0, overflow: 'hidden' }}>
-      {/* Верхняя панель - группировка кнопок */}
-      <div style={{ padding: '10px', background: '#2c3e50', flexShrink: 0 }}>
+      <div style={{ padding: '10px', background: '#84b6e9', flexShrink: 0 }}>
         <div style={{ display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
           
-          {/* Левая группа - Фильтры */}
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#34495e', padding: '5px 10px', borderRadius: '6px' }}>
-            <span style={{ color: 'white', fontSize: '12px' }}>🔍 Фильтры:</span>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#8a8d8f', padding: '5px 10px', borderRadius: '6px' }}>
+            <span style={{ color: 'black', fontSize: '12px' }}>🔍 Точки сбора:</span>
             <input type="text" placeholder="Год" value={filterYear} onChange={(e) => setFilterYear(e.target.value)} style={{ padding: '4px', width: '60px', borderRadius: '4px', border: 'none' }} />
             <input type="text" placeholder="Месяц" value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} style={{ padding: '4px', width: '60px', borderRadius: '4px', border: 'none' }} />
             <input type="text" placeholder="День" value={filterDay} onChange={(e) => setFilterDay(e.target.value)} style={{ padding: '4px', width: '60px', borderRadius: '4px', border: 'none' }} />
             <select value={filterCollector} onChange={(e) => setFilterCollector(e.target.value)} style={{ padding: '4px', borderRadius: '4px', border: 'none' }}>
               <option value="">Все сборщики</option>
-              {persons.map(p => (<option key={p.guid} value={p.full_name}>{p.full_name}</option>))}
+              {persons.map(p => (<option key={p.guid} value={p.display_name}>{p.display_name}</option>))}
             </select>
-           <button onClick={() => { setEditingPoint(null); setInitialLat(null); setInitialLng(null); setShowForm(true); }} style={{ background: '#777b79', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>➕ Новая точка</button>
+            <button onClick={() => { setEditingPoint(null); setInitialLat(null); setInitialLng(null); setShowForm(true); }} style={{ background: '#777b79', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>➕ Новая точка</button>
           </div>
           
-          {/* Центральная группа - Действия с точками */}
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#34495e', padding: '5px 10px', borderRadius: '6px' }}>
-            <span style={{ color: 'white', fontSize: '12px' }}>📍 Действия:</span>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#8a8d8f', padding: '5px 10px', borderRadius: '6px' }}>
+            <span style={{ color: 'black', fontSize: '12px' }}>📍 Печать этикеток:</span>
             <button onClick={selectAll} style={{ background: '#3498db', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>✓ Выбрать всё</button>
             <button onClick={resetQuantities} style={{ background: '#e67e22', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>⟳ Сбросить</button>
             <button onClick={printLabels} style={{ background: '#27ae60', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>🖨️ Печать ({getTotalLabels()})</button>
           </div>
           
-          {/* Правая группа - Администрирование */}
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#34495e', padding: '5px 10px', borderRadius: '6px' }}>
-            <span style={{ color: 'white', fontSize: '12px' }}>⚙️ Администрирование:</span>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#8a8d8f', padding: '5px 10px', borderRadius: '6px' }}>
+            <span style={{ color: 'black', fontSize: '12px' }}>⚙️ Администрирование:</span>
             <button onClick={() => setShowCollectorManager(true)} style={{ background: '#f39c12', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>👥 Сборщики</button>
             <button onClick={() => setShowTaxonManagerGlobal(true)} style={{ background: '#3498db', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>🔬 Таксоны</button>
+            <button onClick={() => setShowStudyManager(true)} style={{ background: "#e67e22", color: "white", border: "none", padding: "4px 12px", borderRadius: "4px", cursor: "pointer" }}>📚 Исследования</button>
             <button onClick={() => setViewMode(viewMode === 'map' ? 'graph' : 'map')} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>
               {viewMode === 'map' ? '📊 Переключить на граф' : '🗺️ Переключить на карту'}
             </button>
@@ -282,18 +279,20 @@ function App() {
         )}
         
         <div style={{ width: viewMode === 'map' ? '60%' : '100%', height: '100%', position: 'relative' }}>
-          {viewMode === 'map' ? (
-            <LoadScript googleMapsApiKey={MAPS_API_KEY} loadingElement={<div>Загрузка карт...</div>}>
-              <MapView
-                points={filteredPoints}
-                onMapClick={onMapClick}
-                highlightedRows={highlightedRows}
-                onMarkerClick={handleMarkerClick}
-              />
-            </LoadScript>
-          ) : (
-            <GraphView onUpdate={fetchData} refreshTrigger={points} />
-          )}
+          <LoadScript googleMapsApiKey={MAPS_API_KEY} loadingElement={<div>Загрузка карт...</div>}>
+            <div style={{ height: '100%', width: '100%' }}>
+              {viewMode === 'map' ? (
+                <MapView
+                  points={filteredPoints}
+                  onMapClick={onMapClick}
+                  highlightedRows={highlightedRows}
+                  onMarkerClick={handleMarkerClick}
+                />
+              ) : (
+                <GraphView onUpdate={fetchData} refreshTrigger={points} />
+              )}
+            </div>
+          </LoadScript>
         </div>
       </div>
       
@@ -309,6 +308,7 @@ function App() {
       {showCollectorManager && <CollectorManager onClose={() => setShowCollectorManager(false)} onUpdate={fetchData} />}
       {showTaxonManagerGlobal && <TaxonManager onClose={() => setShowTaxonManagerGlobal(false)} onUpdate={fetchData} />}
       {showImportModal && <ImportTextModal onClose={() => setShowImportModal(false)} onImport={handleImport} />}
+      {showStudyManager && <StudyManager onClose={() => setShowStudyManager(false)} onUpdate={fetchData} />}
     </div>
   );
 }

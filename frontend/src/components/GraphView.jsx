@@ -128,6 +128,24 @@ useEffect(() => {
         }
       }
 
+      // Загружаем источники для точек
+      const sourcesMap = new Map();
+      for (const point of pointsRes.data) {
+        try {
+          const sourcesRes = await axios.get(`${API_URL}/sources/point/${point.guid}`);
+          if (sourcesRes.data.length > 0) {
+            sourcesMap.set(point.guid, sourcesRes.data);
+          }
+        } catch (error) {}
+      }
+      
+      // Добавляем источники в узлы
+      nodes.forEach(node => {
+        if (node.type === "point" && sourcesMap.has(node.id)) {
+          node.sources = sourcesMap.get(node.id);
+        }
+      });
+      
       setGraphData({ nodes, links });
     } catch (error) {
       console.error('Ошибка загрузки данных для графа:', error);
@@ -378,7 +396,7 @@ const applyColumnFilterValue = (column, value) => {
         borderRadius: '8px',
         padding: '15px',
         zIndex: 1000,
-        boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
+        boxShadow: '0 4px 20px rgba(203, 195, 195, 0.2)',
         minWidth: '200px'
       }}>
         <h4 style={{ margin: '0 0 10px 0' }}>{title}</h4>
@@ -485,13 +503,13 @@ const applyColumnFilterValue = (column, value) => {
         <ForceGraph2D
           ref={fgRef}
           graphData={graphData}
-          nodeLabel="name"
+          nodeLabel={node => `${node.name}${node.sources && node.sources.length > 0 ? ` (📚 ${node.sources.length})` : ""}`}
           nodeColor={node => node.group === 1 ? '#3498db' : node.group === 2 ? '#2ecc71' : '#9b59b6'}
           nodeVal={node => node.type === 'point' ? 3 : 5}
           onNodeClick={handleGraphNodeClick}
           cooldownTicks={100}
           onEngineStop={() => fgRef.current?.zoomToFit(400)}
-          backgroundColor="#1a1a2e"
+          backgroundColor="#d1dbe8"
         />
       </div>
 

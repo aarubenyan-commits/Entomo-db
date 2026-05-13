@@ -23,22 +23,9 @@ const CollectorManager = ({ onClose, onUpdate }) => {
 
   const handleAdd = async () => {
     if (!newName.trim()) return;
-    
-    // Проверка уникальности
-    const existing = collectors.find(c => c.display_name.toLowerCase() === newName.toLowerCase());
-    if (existing) {
-      alert(`Сборщик "${newName}" уже существует!`);
-      return;
-    }
-    
-    try {
-      await axios.post(`${API_URL}/persons?display_name=${encodeURIComponent(newName)}`);
-      setNewName('');
-      loadCollectors();
-      if (onUpdate) onUpdate();
-    } catch (error) {
-      alert('Ошибка добавления сборщика');
-    }
+    await axios.post(`${API_URL}/persons?display_name=${encodeURIComponent(newName)}`);
+    setNewName('');
+    loadCollectors();
   };
 
   const handleEdit = (guid, name) => {
@@ -48,22 +35,9 @@ const CollectorManager = ({ onClose, onUpdate }) => {
 
   const handleSave = async (guid) => {
     if (!editName.trim()) return;
-    
-    // Проверка уникальности при редактировании
-    const existing = collectors.find(c => c.display_name.toLowerCase() === editName.toLowerCase() && c.guid !== guid);
-    if (existing) {
-      alert(`Сборщик "${editName}" уже существует!`);
-      return;
-    }
-    
-    try {
-      await axios.put(`${API_URL}/persons/${guid}?display_name=${encodeURIComponent(editName)}`);
-      setEditingId(null);
-      loadCollectors();
-      if (onUpdate) onUpdate();
-    } catch (error) {
-      alert('Ошибка сохранения сборщика');
-    }
+    await axios.put(`${API_URL}/persons/${guid}?display_name=${encodeURIComponent(editName)}`);
+    setEditingId(null);
+    loadCollectors();
   };
 
   const handleDeleteClick = async (collector) => {
@@ -126,46 +100,26 @@ const CollectorManager = ({ onClose, onUpdate }) => {
           <button onClick={handleAdd} style={{ padding: '8px 16px' }}>➕ Добавить</button>
         </div>
         <hr />
-        
-        <div style={{ border: '1px solid #ddd', borderRadius: '4px', overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ background: '#f5f5f5', borderBottom: '1px solid #ddd' }}>
-                <th style={{ padding: '8px', textAlign: 'left', width: '50px' }}>#</th>
-                <th style={{ padding: '8px', textAlign: 'left' }}>Сборщик</th>
-                <th style={{ padding: '8px', textAlign: 'center', width: '100px' }}>Действия</th>
-              </tr>
-            </thead>
-            <tbody>
-              {collectors.map((c, idx) => (
-                <tr key={c.guid} style={{ borderBottom: '1px solid #eee' }}>
-                  <td style={{ padding: '8px' }}>{idx+1}.</td>
-                  <td style={{ padding: '8px' }}>
-                    {editingId === c.guid ? (
-                      <input type="text" value={editName} onChange={e => setEditName(e.target.value)} style={{ width: '100%', padding: '4px' }} />
-                    ) : (
-                      <strong>{c.display_name}</strong>
-                    )}
-                  </td>
-                  <td style={{ padding: '8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                    {editingId === c.guid ? (
-                      <>
-                        <button onClick={() => handleSave(c.guid)} style={{ marginRight: '5px', padding: '4px 8px', background: '#27ae60', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>💾</button>
-                        <button onClick={() => setEditingId(null)} style={{ padding: '4px 8px', background: '#95a5a6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>✖</button>
-                      </>
-                    ) : (
-                      <>
-                        <button onClick={() => handleEdit(c.guid, c.display_name)} style={{ marginRight: '5px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px' }}>✏️</button>
-                        <button onClick={() => handleDeleteClick(c)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#e74c3c' }}>🗑️</button>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        
+        <ul style={{ listStyle: 'none', padding: 0 }}>
+          {collectors.map((c, idx) => (
+            <li key={c.guid} style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ minWidth: '30px' }}>{idx+1}.</span>
+              {editingId === c.guid ? (
+                <>
+                  <input type="text" value={editName} onChange={e => setEditName(e.target.value)} style={{ flex: 1 }} />
+                  <button onClick={() => handleSave(c.guid)}>💾</button>
+                  <button onClick={() => setEditingId(null)}>❌</button>
+                </>
+              ) : (
+                <>
+                  <span style={{ flex: 1 }}>{c.display_name}</span>
+                  <button onClick={() => handleEdit(c.guid, c.display_name)}>✏️</button>
+                  <button onClick={() => handleDeleteClick(c)} style={{ color: 'red' }}>🗑️</button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
         <div style={{ marginTop: '20px', textAlign: 'right' }}>
           <button onClick={() => { if (onUpdate) onUpdate(); onClose(); }}>Закрыть</button>
         </div>

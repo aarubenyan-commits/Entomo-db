@@ -4,18 +4,28 @@ import axios from 'axios';
 
 const API_URL = 'http://127.0.0.1:8000';
 
-const GraphView = ({ onNodeClick, onUpdate, refreshTrigger }) => {
+const GraphView = ({ onUpdate, refreshTrigger }) => {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] });
-  const [selectedNode, setSelectedNode] = useState(null);
-  const [showContextMenu, setShowContextMenu] = useState(false);
-  const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
   const [searchTerm, setSearchTerm] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
+  const [flatTableData, setFlatTableData] = useState([]);
+  const [filteredData, setFilteredData] = useState([]);
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [tableHeight, setTableHeight] = useState(50);
   const fgRef = useRef();
+  const resizerRef = useRef();
 
   useEffect(() => {
     fetchGraphData();
   }, [refreshTrigger]);
+
+  useEffect(() => {
+    if (searchTerm.length >= 2) {
+      handleSearch();
+    } else if (searchTerm.length === 0) {
+      setFlatTableData([]);
+      setFilteredData([]);
+    }
+  }, [searchTerm]);
 
   const fetchGraphData = async () => {
     try {
@@ -30,36 +40,36 @@ const GraphView = ({ onNodeClick, onUpdate, refreshTrigger }) => {
       const nodeMap = new Map();
 
       personsRes.data.forEach(p => {
-        const node = { id: p.guid, name: p.full_name, type: 'person', group: 1 };
-        nodes.push(node);
-        nodeMap.set(p.guid, node);
+        nodes.push({ id: p.guid, name: p.display_name, type: 'person', group: 1 });
+        nodeMap.set(p.guid, true);
       });
 
       taxaRes.data.forEach(t => {
-        const node = { id: t.guid, name: t.full_name, type: 'taxon', group: 3 };
-        nodes.push(node);
-        nodeMap.set(t.guid, node);
+        nodes.push({ id: t.guid, name: t.display_name, type: 'taxon', group: 3, genus: t.genus, species: t.species, subspecies: t.subspecies });
+        nodeMap.set(t.guid, true);
       });
 
       pointsRes.data.forEach(p => {
-        const node = { 
-          id: p.guid, 
-          name: p.location_original || p.display_date || 'Без названия', 
-          type: 'point', 
+        nodes.push({
+          id: p.guid,
+          name: p.location_original || p.display_date || 'Без названия',
+          type: 'point',
           group: 2,
           latitude: p.latitude,
-          longitude: p.longitude
-        };
-        nodes.push(node);
-        nodeMap.set(p.guid, node);
+          longitude: p.longitude,
+          full_data: p
+        });
+        nodeMap.set(p.guid, true);
 
         if (p.collector_name) {
-          const personNode = personsRes.data.find(person => person.full_name === p.collector_name);
+          const personNode = personsRes.data.find(person => person.display_name === p.collector_name);
           if (personNode && nodeMap.has(personNode.guid)) {
-            links.push({
-              source: personNode.guid,
-              target: p.guid,
-              type: 'collected_at'
+            links.push({ 
+              source: personNode.guid, 
+              target: p.guid, 
+              type: 'collected_at',
+              description: 'Собрана',
+              date: p.date_text || 'дата не указана'
             });
           }
         }
@@ -70,16 +80,15 @@ const GraphView = ({ onNodeClick, onUpdate, refreshTrigger }) => {
           const taxaLinksRes = await axios.get(`${API_URL}/point_taxa/${point.guid}`);
           taxaLinksRes.data.forEach(taxon => {
             if (nodeMap.has(taxon.guid)) {
-              links.push({
-                source: point.guid,
-                target: taxon.guid,
-                type: 'has_taxon'
+              links.push({ 
+                source: point.guid, 
+                target: taxon.guid, 
+                type: 'has_taxon',
+                description: 'Содержит таксон'
               });
             }
           });
-        } catch (error) {
-          console.error('Ошибка загрузки таксонов для точки', point.guid);
-        }
+        } catch (error) {}
       }
 
       setGraphData({ nodes, links });
@@ -88,189 +97,182 @@ const GraphView = ({ onNodeClick, onUpdate, refreshTrigger }) => {
     }
   };
 
-  const handleNodeClick = (node, event) => {
-    setSelectedNode(node);
-    setContextMenuPosition({ x: event.clientX, y: event.clientY });
-    setShowContextMenu(true);
-    if (onNodeClick) onNodeClick(node);
-  };
-
-  const handleCloseMenu = () => {
-    setShowContextMenu(false);
-    setSelectedNode(null);
-  };
-
-  const handleEdit = () => {
-    if (selectedNode) {
-      alert(`Редактирование ${selectedNode.name} (пока в разработке)`);
-    }
-    handleCloseMenu();
-  };
-
-  const handleDelete = async () => {
-    if (!selectedNode) return;
-    
-    if (window.confirm(`Удалить ${selectedNode.name}?`)) {
-      try {
-        if (selectedNode.type === 'point') {
-          await axios.delete(`${API_URL}/points/${selectedNode.id}`);
-        } else if (selectedNode.type === 'person') {
-          await axios.delete(`${API_URL}/persons/${selectedNode.id}`);
-        } else if (selectedNode.type === 'taxon') {
-          await axios.delete(`${API_URL}/taxa/${selectedNode.id}`);
-        }
-        fetchGraphData();
-        if (onUpdate) onUpdate();
-        alert('Удалено успешно');
-      } catch (error) {
-        console.error('Ошибка удаления:', error);
-        alert('Ошибка удаления');
-      }
-    }
-    handleCloseMenu();
-  };
-
   const handleSearch = async () => {
-    if (!searchTerm.trim()) {
-      setSearchResults([]);
-      return;
-    }
+    if (!searchTerm.trim()) return;
 
     try {
       const response = await axios.get(`${API_URL}/search?q=${encodeURIComponent(searchTerm)}`);
-      setSearchResults(response.data);
+      const results = response.data;
+      const flatRows = [];
       
-      if (fgRef.current) {
-        const highlightedNodes = response.data.map(item => item.guid);
-        fgRef.current.nodeColor(node => 
-          highlightedNodes.includes(node.id) ? '#ff0000' : (node.group === 1 ? '#3498db' : node.group === 2 ? '#2ecc71' : '#9b59b6')
+      for (const result of results) {
+        const nodeLinks = graphData.links.filter(link => 
+          link.source.id === result.guid || link.target.id === result.guid
         );
+        
+        if (nodeLinks.length === 0) {
+          flatRows.push({
+            source_guid: result.guid,
+            source_name: result.name,
+            source_type: result.type,
+            link_type: null,
+            link_description: null,
+            target_name: null,
+            target_type: null
+          });
+        } else {
+          for (const link of nodeLinks) {
+            const isSource = link.source.id === result.guid;
+            const targetId = isSource ? link.target.id : link.source.id;
+            const targetNode = graphData.nodes.find(n => n.id === targetId);
+            
+            flatRows.push({
+              source_guid: result.guid,
+              source_name: result.name,
+              source_type: result.type,
+              link_type: link.type,
+              link_description: link.description,
+              link_date: link.date,
+              target_name: targetNode?.name || 'Неизвестно',
+              target_type: targetNode?.type || 'unknown',
+              direction: isSource ? '→ исходящая' : '← входящая'
+            });
+          }
+        }
       }
+      
+      setFlatTableData(flatRows);
+      setFilteredData([]);
     } catch (error) {
       console.error('Ошибка поиска:', error);
     }
   };
 
-  const handleAddNode = async () => {
-    const type = prompt('Что добавить? (point/person/taxon)');
-    if (!type) return;
-    
-    const name = prompt('Введите название:');
-    if (!name) return;
-    
-    try {
-      if (type === 'point') {
-        const lat = prompt('Широта (дес.):');
-        const lon = prompt('Долгота (дес.):');
-        if (lat && lon) {
-          await axios.post(`${API_URL}/points/create`, {
-            latitude: parseFloat(lat),
-            longitude: parseFloat(lon),
-            location_original: name,
-            collector_name: 'Системный'
-          });
-        }
-      } else if (type === 'person') {
-        await axios.post(`${API_URL}/persons?full_name=${encodeURIComponent(name)}&role=collector`);
-      } else if (type === 'taxon') {
-        const genus = prompt('Род:');
-        if (genus) {
-          await axios.post(`${API_URL}/taxa?genus=${encodeURIComponent(genus)}&species=${encodeURIComponent(name)}`);
-        }
+  const handleRowClick = (row) => {
+    if (row.source_guid) {
+      setSelectedNodeId(row.source_guid);
+      const node = graphData.nodes.find(n => n.id === row.source_guid);
+      if (node && fgRef.current) {
+        fgRef.current.centerAt(node.x, node.y, 1000);
+        fgRef.current.zoom(2, 1000);
       }
-      fetchGraphData();
-      if (onUpdate) onUpdate();
-      alert('Добавлено успешно');
-    } catch (error) {
-      console.error('Ошибка добавления:', error);
-      alert('Ошибка добавления');
     }
   };
 
-  const handleRefresh = () => {
-    fetchGraphData();
-    if (onUpdate) onUpdate();
+  const handleGraphNodeClick = (node) => {
+    setSelectedNodeId(node.id);
+    if (fgRef.current) {
+      fgRef.current.centerAt(node.x, node.y, 1000);
+      fgRef.current.zoom(2, 1000);
+    }
   };
 
+  const handleResizeStart = (e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = tableHeight;
+    
+    const onMouseMove = (moveEvent) => {
+      const delta = moveEvent.clientY - startY;
+      const newHeight = startHeight + (delta / window.innerHeight) * 100;
+      setTableHeight(Math.min(80, Math.max(20, newHeight)));
+    };
+    
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+    
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
+
+  const displayData = filteredData.length > 0 ? filteredData : flatTableData;
+
   return (
-    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-      <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 10, background: 'white', padding: '10px', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-          <input
-            type="text"
-            placeholder="Поиск..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            style={{ padding: '6px', borderRadius: '4px', border: '1px solid #ccc' }}
-          />
-          <button onClick={handleSearch} style={{ padding: '6px 12px', background: '#3498db', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-            🔍 Найти
-          </button>
-          <button onClick={handleAddNode} style={{ padding: '6px 12px', background: '#2ecc71', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-            ➕ Добавить
-          </button>
-          <button onClick={handleRefresh} style={{ padding: '6px 12px', background: '#f39c12', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-            🔄 Обновить
-          </button>
-        </div>
-        {searchResults.length > 0 && (
-          <div style={{ background: 'white', border: '1px solid #ccc', borderRadius: '4px', maxHeight: '150px', overflow: 'auto' }}>
-            {searchResults.map(result => (
-              <div key={result.guid} style={{ padding: '5px', borderBottom: '1px solid #eee', cursor: 'pointer' }} onClick={() => {
-                const node = graphData.nodes.find(n => n.id === result.guid);
-                if (node && fgRef.current) {
-                  fgRef.current.centerAt(node.x, node.y, 1000);
-                  fgRef.current.zoom(2, 1000);
-                }
-              }}>
-                {result.name} ({result.type})
-              </div>
-            ))}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
+      <div style={{ padding: '10px', background: 'white', borderBottom: '1px solid #ddd', flexShrink: 0 }}>
+        <input
+          type="text"
+          placeholder="Поиск (минимум 2 символа)..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          style={{ width: '100%', padding: '8px', fontSize: '14px', borderRadius: '4px', border: '1px solid #ccc' }}
+        />
+      </div>
+
+      <div style={{ height: `${tableHeight}%`, overflow: 'auto', borderBottom: '1px solid #ddd', background: '#f9f9f9' }}>
+        {displayData.length > 0 ? (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', border: '1px solid #d0d0d0' }}>
+            <thead style={{ position: 'sticky', top: 0, background: '#f0f0f0', zIndex: 10 }}>
+              <tr style={{ borderBottom: '2px solid #a0a0a0' }}>
+                <th style={{ padding: '8px', borderRight: '1px solid #d0d0d0', width: '30%' }}>Объект</th>
+                <th style={{ padding: '8px', borderRight: '1px solid #d0d0d0', width: '40%' }}>Связь</th>
+                <th style={{ padding: '8px', width: '30%' }}>Связан с</th>
+              </tr>
+            </thead>
+            <tbody>
+              {displayData.map((row, idx) => (
+                <tr 
+                  key={idx}
+                  onClick={() => handleRowClick(row)}
+                  style={{ 
+                    cursor: 'pointer', 
+                    backgroundColor: selectedNodeId === row.source_guid ? '#e3f2fd' : 'white',
+                    borderBottom: '1px solid #e0e0e0'
+                  }}
+                >
+                  <td style={{ padding: '8px', borderRight: '1px solid #e0e0e0', verticalAlign: 'top' }}>
+                    <strong>{row.source_name}</strong>
+                    <div style={{ fontSize: '10px', color: '#666' }}>({row.source_type})</div>
+                  </td>
+                  <td style={{ padding: '8px', borderRight: '1px solid #e0e0e0', verticalAlign: 'top' }}>
+                    {row.link_type ? (
+                      <div>
+                        <div>{row.link_description || row.link_type}</div>
+                        {row.link_date && <div style={{ fontSize: '10px', color: '#666' }}>📅 {row.link_date}</div>}
+                        <div style={{ fontSize: '10px', color: '#888', marginTop: '3px' }}>{row.direction}</div>
+                      </div>
+                    ) : (
+                      <span style={{ color: '#999' }}>Нет связей</span>
+                    )}
+                  </td>
+                  <td style={{ padding: '8px', verticalAlign: 'top' }}>
+                    {row.target_name ? (
+                      <>
+                        <strong>{row.target_name}</strong>
+                        <div style={{ fontSize: '10px', color: '#666' }}>({row.target_type})</div>
+                      </>
+                    ) : (
+                      <span style={{ color: '#999' }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ textAlign: 'center', color: '#999', padding: '40px' }}>
+            {searchTerm ? 'Ничего не найдено' : 'Введите поисковый запрос (минимум 2 символа)'}
           </div>
         )}
       </div>
-      
-      <ForceGraph2D
-        ref={fgRef}
-        graphData={graphData}
-        nodeLabel="name"
-        nodeColor={node => node.group === 1 ? '#3498db' : node.group === 2 ? '#2ecc71' : '#9b59b6'}
-        nodeVal={node => node.type === 'point' ? 4 : 6}
-        onNodeClick={handleNodeClick}
-        linkLabel={link => link.type}
-        linkColor={() => '#999999'}
-        linkWidth={1}
-        cooldownTicks={100}
-        onEngineStop={() => fgRef.current?.zoomToFit(400)}
-      />
-      
-      {showContextMenu && (
-        <div
-          style={{
-            position: 'fixed',
-            top: contextMenuPosition.y,
-            left: contextMenuPosition.x,
-            background: 'white',
-            border: '1px solid #ccc',
-            borderRadius: '4px',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
-            zIndex: 1000
-          }}
-        >
-          <div style={{ padding: '8px 12px', borderBottom: '1px solid #eee', fontWeight: 'bold' }}>
-            {selectedNode?.name}
-          </div>
-          <div style={{ padding: '8px 12px', cursor: 'pointer' }} onClick={handleEdit}>
-            ✏️ Редактировать
-          </div>
-          <div style={{ padding: '8px 12px', cursor: 'pointer', color: 'red', borderTop: '1px solid #eee' }} onClick={handleDelete}>
-            🗑️ Удалить
-          </div>
-          <div style={{ padding: '8px 12px', cursor: 'pointer', borderTop: '1px solid #eee' }} onClick={handleCloseMenu}>
-            ❌ Отмена
-          </div>
-        </div>
-      )}
+
+      <div ref={resizerRef} onMouseDown={handleResizeStart} style={{ height: '5px', background: '#ccc', cursor: 'ns-resize', flexShrink: 0 }} />
+
+      <div style={{ height: `${100 - tableHeight}%`, position: 'relative', background: '#1a1a2e' }}>
+        <ForceGraph2D
+          ref={fgRef}
+          graphData={graphData}
+          nodeLabel="name"
+          nodeColor={node => node.group === 1 ? '#3498db' : node.group === 2 ? '#2ecc71' : '#9b59b6'}
+          nodeVal={node => node.type === 'point' ? 3 : 5}
+          onNodeClick={handleGraphNodeClick}
+          cooldownTicks={100}
+          onEngineStop={() => fgRef.current?.zoomToFit(400)}
+          backgroundColor="#1a1a2e"
+        />
+      </div>
     </div>
   );
 };
