@@ -7,7 +7,7 @@ import PointForm from './components/PointForm';
 import CollectorManager from './components/CollectorManager';
 import StudyManager from './components/StudyManager';
 import TaxonManager from './components/TaxonManager';
-import ImportTextModal from './components/ImportTextModal';
+import ImportWizard from './components/ImportWizard';
 import MapView from './components/MapView';
 import GraphView from './components/GraphView';
 
@@ -40,14 +40,12 @@ function App() {
   const [highlightedRows, setHighlightedRows] = useState(new Set());
   const [showForm, setShowForm] = useState(false);
   const [showCollectorManager, setShowCollectorManager] = useState(false);
-  const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [showStudyManager, setShowStudyManager] = useState(false);
   const [showTaxonManagerGlobal, setShowTaxonManagerGlobal] = useState(false);
-  const [showImportModal, setShowImportModal] = useState(false);
+  const [showImportWizard, setShowImportWizard] = useState(false);
   const [editingPoint, setEditingPoint] = useState(null);
   const [initialLat, setInitialLat] = useState(null);
   const [initialLng, setInitialLng] = useState(null);
-  const [mapType, setMapType] = useState('osm');
   const [viewMode, setViewMode] = useState('map');
   const tableBodyRef = useRef(null);
 
@@ -112,7 +110,6 @@ function App() {
   };
 
   const handleMarkerClick = (guid, lat, lng) => {
-    // На карте может быть выделена только одна точка
     setHighlightedRows(new Set([guid]));
     scrollToRow(guid);
   };
@@ -197,11 +194,6 @@ function App() {
     setShowForm(true);
   };
 
-  const handleImport = () => {
-    fetchData();
-    setShowImportModal(false);
-  };
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', margin: 0, padding: 0, overflow: 'hidden' }}>
       <div style={{ padding: '10px', background: '#84b6e9', flexShrink: 0 }}>
@@ -234,7 +226,7 @@ function App() {
             <button onClick={() => setViewMode(viewMode === 'map' ? 'graph' : 'map')} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>
               {viewMode === 'map' ? '📊 Переключить на граф' : '🗺️ Переключить на карту'}
             </button>
-            <button onClick={() => setShowImportModal(true)} style={{ background: '#1abc9c', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>📂 Импорт текста</button>
+            <button onClick={() => setShowImportWizard(true)} style={{ background: '#1abc9c', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>📥 Импорт данных (CSV/TXT)</button>
           </div>
           
           <div style={{ color: 'white', marginLeft: 'auto', fontSize: '14px', fontWeight: 'bold' }}>
@@ -307,7 +299,7 @@ function App() {
       )}
       {showCollectorManager && <CollectorManager onClose={() => setShowCollectorManager(false)} onUpdate={fetchData} />}
       {showTaxonManagerGlobal && <TaxonManager onClose={() => setShowTaxonManagerGlobal(false)} onUpdate={fetchData} />}
-      {showImportModal && <ImportTextModal onClose={() => setShowImportModal(false)} onImport={handleImport} />}
+      {showImportWizard && <ImportWizard onClose={() => setShowImportWizard(false)} onImportComplete={fetchData} />}
       {showStudyManager && <StudyManager onClose={() => setShowStudyManager(false)} onUpdate={fetchData} />}
     </div>
   );
