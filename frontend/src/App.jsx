@@ -8,6 +8,7 @@ import CollectorManager from './components/CollectorManager';
 import StudyManager from './components/StudyManager';
 import TaxonManager from './components/TaxonManager';
 import ImportWizard from './components/ImportWizard';
+import ExportModal from './components/ExportModal';
 import MapView from './components/MapView';
 import GraphView from './components/GraphView';
 
@@ -43,6 +44,7 @@ function App() {
   const [showStudyManager, setShowStudyManager] = useState(false);
   const [showTaxonManagerGlobal, setShowTaxonManagerGlobal] = useState(false);
   const [showImportWizard, setShowImportWizard] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
   const [editingPoint, setEditingPoint] = useState(null);
   const [initialLat, setInitialLat] = useState(null);
   const [initialLng, setInitialLng] = useState(null);
@@ -226,7 +228,8 @@ function App() {
             <button onClick={() => setViewMode(viewMode === 'map' ? 'graph' : 'map')} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>
               {viewMode === 'map' ? '📊 Переключить на граф' : '🗺️ Переключить на карту'}
             </button>
-            <button onClick={() => setShowImportWizard(true)} style={{ background: '#1abc9c', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>📥 Импорт данных (CSV/TXT)</button>
+            <button onClick={() => setShowImportWizard(true)} style={{ background: '#1abc9c', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>📥 Импорт данных</button>
+            <button onClick={() => setShowExportModal(true)} style={{ background: '#1abc9c', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>📤 Экспорт данных</button>
           </div>
           
           <div style={{ color: 'white', marginLeft: 'auto', fontSize: '14px', fontWeight: 'bold' }}>
@@ -299,8 +302,9 @@ function App() {
       )}
       {showCollectorManager && <CollectorManager onClose={() => setShowCollectorManager(false)} onUpdate={fetchData} />}
       {showTaxonManagerGlobal && <TaxonManager onClose={() => setShowTaxonManagerGlobal(false)} onUpdate={fetchData} />}
-      {showImportWizard && <ImportWizard onClose={() => setShowImportWizard(false)} onImportComplete={fetchData} />}
       {showStudyManager && <StudyManager onClose={() => setShowStudyManager(false)} onUpdate={fetchData} />}
+      {showImportWizard && <ImportWizard onClose={() => setShowImportWizard(false)} onImportComplete={fetchData} />}
+      {showExportModal && <ExportModal filters={{year: filterYear, month: filterMonth, day: filterDay, collector: filterCollector}} onClose={() => setShowExportModal(false)} />}
     </div>
   );
 }

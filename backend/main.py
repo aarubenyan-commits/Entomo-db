@@ -793,10 +793,26 @@ async def confirm_import(data: dict):
                     db.flush()
                     imported_taxa.append({"guid": taxon.guid, "name": taxon.display_name})
             
+            # Получаем координаты и конвертируем в DMS
+            lat = row.get('latitude')
+            lon = row.get('longitude')
+            lat_dms = row.get('latitude_dms')
+            lon_dms = row.get('longitude_dms')
+            
+            # Если есть десятичные координаты, но нет DMS - конвертируем
+            if lat is not None and lon is not None:
+                if not lat_dms:
+                    lat_dms = decimal_to_dms_advanced(float(lat), is_lat=True)
+                if not lon_dms:
+                    lon_dms = decimal_to_dms_advanced(float(lon), is_lat=False)
+            
             point = Point(
-                latitude=row.get('latitude'), longitude=row.get('longitude'),
-                latitude_dms=row.get('latitude_dms'), longitude_dms=row.get('longitude_dms'),
-                location_original=row.get('location_original', ''), date_text=row.get('date_text', ''),
+                latitude=lat,
+                longitude=lon,
+                latitude_dms=lat_dms,
+                longitude_dms=lon_dms,
+                location_original=row.get('location_original', ''),
+                date_text=row.get('date_text', ''),
                 created_at=now, updated_at=now
             )
             db.add(point)
@@ -875,24 +891,6 @@ async def confirm_import(data: dict):
         "studies": imported_studies,
         "errors": errors
     }
-
-# ========== ИССЛЕДОВАНИЯ (STUDY) ==========
-@app.get("/studies")
-def get_studies():
-    db = SessionLocal()
-    studies = db.query(Study).all()
-    db.close()
-    return [{"guid": s.guid, "title": s.title, "url": s.url, "description": s.description, "authors": s.authors, "created_at": s.created_at, "updated_at": s.updated_at} for s in studies]
-
-@app.get("/studies/{guid}")
-def get_study(guid: str):
-    db = SessionLocal()
-    study = db.query(Study).filter(Study.guid == guid).first()
-    if not study:
-        raise HTTPException(404, "Study not found")
-    db.close()
-    return {"guid": study.guid, "title": study.title, "url": study.url, "description": study.description, "authors": study.authors}
-
 @app.post("/studies")
 def create_study(study_data: StudyCreate):
     db = SessionLocal()
@@ -1017,6 +1015,84 @@ def get_sources(from_type: str, from_guid: str):
     db.close()
     return sources
 
+# ========== ЭКСПОРТ В CSV ==========
+from fastapi.responses import StreamingResponse
+import io
+import csv
+from datetime import datetime
+
+@app.get("/export/points")
+async def export_points(year: Optional[str] = None, month: Optional[str] = None, day: Optional[str] = None, collector: Optional[str] = None):
+    db = SessionLocal()
+    query = db.query(Point)
+    if year:
+        query = query.filter(Point.date_text.contains(year))
+    if month:
+        query = query.filter(Point.date_text.contains(f".{month}."))
+    if day:
+        query = query.filter(Point.date_text.startswith(day.zfill(2)))
+    points = query.all()
+    export_data = []
+    for p in points:
+        link = db.query(Link).filter(Link.to_guid == p.guid, Link.from_type == "person", Link.relation_type == "collected_at").first()
+        collector_name = None
+        if link:
+            person = db.query(Person).filter(Person.guid == link.from_guid).first()
+            if person:
+                collector_name = person.display_name
+        taxon_links = db.query(Link).filter(Link.to_guid == p.guid, Link.from_type == "taxon", Link.relation_type == "has_taxon").all()
+        taxa_names = []
+        for tl in taxon_links:
+            taxon = db.query(Taxon).filter(Taxon.guid == tl.from_guid).first()
+            if taxon:
+                taxa_names.append(taxon.display_name or f"{taxon.genus} {taxon.species or ''}")
+        source_links = db.query(Link).filter(Link.from_guid == p.guid, Link.from_type == "point", Link.relation_type == "source").all()
+        sources = []
+        for sl in source_links:
+            study = db.query(Study).filter(Study.guid == sl.to_guid).first()
+            if study:
+                sources.append(study.title or study.url)
+        export_data.append({
+            "latitude": p.latitude, "longitude": p.longitude, "latitude_dms": p.latitude_dms, "longitude_dms": p.longitude_dms,
+            "location_original": p.location_original, "date_text": p.date_text, "collector": collector_name,
+            "taxa": "; ".join(taxa_names), "sources": "; ".join(sources)
+        })
+    db.close()
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=["latitude", "longitude", "latitude_dms", "longitude_dms", "location_original", "date_text", "collector", "taxa", "sources"])
+    writer.writeheader()
+    writer.writerows(export_data)
+    filename = f"entomo_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+@app.get("/export/taxa")
+async def export_taxa():
+    db = SessionLocal()
+    taxa = db.query(Taxon).all()
+    export_data = [{"genus": t.genus, "species": t.species, "subspecies": t.subspecies, "display_name": t.display_name, "created_at": t.created_at} for t in taxa]
+    db.close()
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=["genus", "species", "subspecies", "display_name", "created_at"])
+    writer.writeheader()
+    writer.writerows(export_data)
+    filename = f"entomo_taxa_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+@app.get("/export/studies")
+async def export_studies():
+    db = SessionLocal()
+    studies = db.query(Study).all()
+    export_data = [{"title": s.title, "url": s.url, "description": s.description, "authors": s.authors, "created_at": s.created_at} for s in studies]
+    db.close()
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=["title", "url", "description", "authors", "created_at"])
+    writer.writeheader()
+    writer.writerows(export_data)
+    filename = f"entomo_studies_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
+
+
