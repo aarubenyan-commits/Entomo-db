@@ -4,23 +4,19 @@ import { MapContainer, TileLayer, Marker as LeafletMarker, Popup, useMap, useMap
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import MapTypeToggle from './MapTypeToggle';
+import { MapMarkers, createIconFromSvg } from './IconLibrary';
 
-const blueIconSvg = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 36'%3E%3Cpath fill='%234285F4' d='M12,0 C5.373,0 0,5.373 0,12 c0,9 12,24 12,24 s12-15 12-24 C24,5.373 18.627,0 12,0 z'/%3E%3Ccircle fill='white' cx='12' cy='12' r='4'/%3E%3C/svg%3E`;
-const redIconSvg = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 36'%3E%3Cpath fill='%23FF0000' d='M12,0 C5.373,0 0,5.373 0,12 c0,9 12,24 12,24 s12-15 12-24 C24,5.373 18.627,0 12,0 z'/%3E%3Ccircle fill='white' cx='12' cy='12' r='4'/%3E%3C/svg%3E`;
-
-const blueIcon = new L.Icon({
-  iconUrl: blueIconSvg,
-  iconSize: [24, 36],
-  iconAnchor: [12, 36],
-  popupAnchor: [0, -30],
+// Отключаем стандартные иконки Leaflet
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: '',
+  iconUrl: '',
+  shadowUrl: '',
 });
 
-const redIcon = new L.Icon({
-  iconUrl: redIconSvg,
-  iconSize: [24, 36],
-  iconAnchor: [12, 36],
-  popupAnchor: [0, -30],
-});
+// Создаем иконки из SVG
+const blueIcon = createIconFromSvg(MapMarkers.blue(false));
+const redIcon = createIconFromSvg(MapMarkers.red(true));
 
 const defaultCenter = { lat: 39.5, lng: 35.0 };
 const defaultZoom = 6;
@@ -171,7 +167,7 @@ const MapView = ({ points, onMapClick, highlightedRows, onMarkerClick }) => {
   const getAttribution = () => {
     return osmLayer === 'street'
       ? '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-      : 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community';
+      : 'Tiles &copy; Esri';
   };
 
   const highlightedPoint = points.find(p => highlightedRows.has(p.guid));

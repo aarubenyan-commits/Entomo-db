@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import Select from 'react-select';
+import { IconButton } from './IconLibrary';
 
 const API_URL = 'http://127.0.0.1:8000';
 
@@ -11,6 +11,7 @@ const CollectorManager = ({ onClose, onUpdate }) => {
   const [newName, setNewName] = useState('');
   const [deleteDialog, setDeleteDialog] = useState(null);
   const [selectedPoints, setSelectedPoints] = useState(new Set());
+  const [selectedReplacement, setSelectedReplacement] = useState(null);
 
   const loadCollectors = async () => {
     const res = await axios.get(`${API_URL}/persons`);
@@ -24,7 +25,6 @@ const CollectorManager = ({ onClose, onUpdate }) => {
   const handleAdd = async () => {
     if (!newName.trim()) return;
     
-    // Проверка уникальности
     const existing = collectors.find(c => c.display_name.toLowerCase() === newName.toLowerCase());
     if (existing) {
       alert(`Сборщик "${newName}" уже существует!`);
@@ -49,7 +49,6 @@ const CollectorManager = ({ onClose, onUpdate }) => {
   const handleSave = async (guid) => {
     if (!editName.trim()) return;
     
-    // Проверка уникальности при редактировании
     const existing = collectors.find(c => c.display_name.toLowerCase() === editName.toLowerCase() && c.guid !== guid);
     if (existing) {
       alert(`Сборщик "${editName}" уже существует!`);
@@ -80,9 +79,9 @@ const CollectorManager = ({ onClose, onUpdate }) => {
         setDeleteDialog({
           collector,
           points,
-          replacementId: null,
         });
         setSelectedPoints(new Set(points.map(p => p.guid)));
+        setSelectedReplacement(null);
       }
     } catch (err) {
       console.error(err);
@@ -97,22 +96,52 @@ const CollectorManager = ({ onClose, onUpdate }) => {
     setSelectedPoints(newSet);
   };
 
+  const selectAllPoints = () => {
+    if (selectedPoints.size === deleteDialog?.points.length) {
+      setSelectedPoints(new Set());
+    } else {
+      setSelectedPoints(new Set(deleteDialog?.points.map(p => p.guid)));
+    }
+  };
+
   const confirmReplace = async () => {
-    const { collector, replacementId } = deleteDialog;
-    if (!replacementId) {
+    const { collector } = deleteDialog;
+    if (!selectedReplacement) {
       alert('Выберите сборщика для замены');
       return;
     }
-    const replacementCollector = collectors.find(c => c.guid === replacementId);
+    const replacementCollector = collectors.find(c => c.guid === selectedReplacement);
     if (!replacementCollector) return;
 
-    const confirmAll = window.confirm(`Заменить сборщика "${collector.display_name}" на "${replacementCollector.display_name}" во ВСЕХ точках?\n(Выбрано ${selectedPoints.size} из ${deleteDialog.points.length})`);
+    const selectedPointsArray = Array.from(selectedPoints);
+    if (selectedPointsArray.length === 0) {
+      alert('Выберите хотя бы одну точку для замены');
+      return;
+    }
+
+    const confirmAll = window.confirm(`Заменить сборщика "${collector.display_name}" на "${replacementCollector.display_name}" в выбранных точках?\n(Выбрано ${selectedPointsArray.length} из ${deleteDialog.points.length})`);
     if (!confirmAll) return;
 
-    await axios.delete(`${API_URL}/persons/${collector.guid}?replace_with=${encodeURIComponent(replacementCollector.display_name)}`);
-    loadCollectors();
-    if (onUpdate) onUpdate();
-    setDeleteDialog(null);
+    try {
+      // Используем новый эндпоинт bulk-update с replace_person
+      const response = await axios.post(`${API_URL}/points/bulk-update`, {
+        point_guids: selectedPointsArray,
+        updates: {
+          replace_person: {
+            old_person_guid: collector.guid,
+            new_person_guid: replacementCollector.guid
+          }
+        }
+      });
+      
+      alert(response.data.message);
+      loadCollectors();
+      if (onUpdate) onUpdate();
+      setDeleteDialog(null);
+    } catch (error) {
+      console.error('Ошибка замены сборщика:', error);
+      alert('Ошибка при замене сборщика: ' + (error.response?.data?.detail || error.message));
+    }
   };
 
   const closeDialog = () => setDeleteDialog(null);
@@ -123,7 +152,7 @@ const CollectorManager = ({ onClose, onUpdate }) => {
         <h3>Управление сборщиками</h3>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '15px' }}>
           <input type="text" placeholder="Новый сборщик" value={newName} onChange={e => setNewName(e.target.value)} style={{ flex: 1, padding: '8px' }} />
-          <button onClick={handleAdd} style={{ padding: '8px 16px' }}>➕ Добавить</button>
+          <IconButton icon="Add" label="Добавить" onClick={handleAdd} style={{ background: '#27ae60', color: 'white' }} />
         </div>
         <hr />
         
@@ -150,13 +179,13 @@ const CollectorManager = ({ onClose, onUpdate }) => {
                   <td style={{ padding: '8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
                     {editingId === c.guid ? (
                       <>
-                        <button onClick={() => handleSave(c.guid)} style={{ marginRight: '5px', padding: '4px 8px', background: '#27ae60', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>💾</button>
-                        <button onClick={() => setEditingId(null)} style={{ padding: '4px 8px', background: '#95a5a6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>✖</button>
+                        <IconButton icon="Save" onClick={() => handleSave(c.guid)} style={{ background: '#27ae60', color: 'white' }} />
+                        <IconButton icon="Close" onClick={() => setEditingId(null)} style={{ background: '#95a5a6', color: 'white' }} />
                       </>
                     ) : (
                       <>
-                        <button onClick={() => handleEdit(c.guid, c.display_name)} style={{ marginRight: '5px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px' }}>✏️</button>
-                        <button onClick={() => handleDeleteClick(c)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#e74c3c' }}>🗑️</button>
+                        <IconButton icon="Edit" onClick={() => handleEdit(c.guid, c.display_name)} />
+                        <IconButton icon="Delete" onClick={() => handleDeleteClick(c)} style={{ color: '#e74c3c' }} />
                       </>
                     )}
                   </td>
@@ -167,47 +196,139 @@ const CollectorManager = ({ onClose, onUpdate }) => {
         </div>
         
         <div style={{ marginTop: '20px', textAlign: 'right' }}>
-          <button onClick={() => { if (onUpdate) onUpdate(); onClose(); }}>Закрыть</button>
+          <IconButton icon="Close" label="Закрыть" onClick={() => { if (onUpdate) onUpdate(); onClose(); }} style={{ background: '#3498db', color: 'white' }} />
         </div>
       </div>
 
+      {/* Диалог удаления сборщика */}
       {deleteDialog && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
           backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1200
         }}>
-          <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '8px', width: '700px', maxHeight: '80vh', overflow: 'auto' }}>
-            <h3>Удаление сборщика «{deleteDialog.collector.display_name}»</h3>
-            <p>Выберите точки, в которых нужно заменить сборщика (остальным связь будет удалена):</p>
-            <div style={{ maxHeight: '300px', overflow: 'auto', border: '1px solid #ccc', marginBottom: '15px' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead style={{ backgroundColor: '#f0f0f0' }}>
-                  <tr><th style={{ width: '30px' }}><input type="checkbox" checked={selectedPoints.size === deleteDialog.points.length} onChange={() => {
-                    if (selectedPoints.size === deleteDialog.points.length) setSelectedPoints(new Set());
-                    else setSelectedPoints(new Set(deleteDialog.points.map(p => p.guid)));
-                  }} /></th><th>Точка</th><th>Дата</th></tr>
-                </thead>
-                <tbody>
-                  {deleteDialog.points.map(p => (
-                    <tr key={p.guid}>
-                      <td><input type="checkbox" checked={selectedPoints.has(p.guid)} onChange={() => togglePoint(p.guid)} /></td>
-                      <td>{p.location_original}</td>
-                      <td>{p.display_date}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <div style={{ 
+            backgroundColor: 'white', 
+            padding: '25px', 
+            borderRadius: '12px', 
+            width: '900px', 
+            maxWidth: '90vw', 
+            maxHeight: '85vh', 
+            overflow: 'auto',
+            boxShadow: '0 10px 40px rgba(0,0,0,0.3)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h3 style={{ margin: 0, color: '#e74c3c' }}>🗑️ Удаление сборщика «{deleteDialog.collector.display_name}»</h3>
+              <IconButton icon="Close" onClick={closeDialog} style={{ padding: '4px', fontSize: '20px' }} />
             </div>
-            <p>Выберите сборщика, на которого заменить в выбранных точках:</p>
-            <Select
-              options={collectors.filter(c => c.guid !== deleteDialog.collector.guid).map(c => ({ value: c.guid, label: c.display_name }))}
-              onChange={(selected) => setDeleteDialog({ ...deleteDialog, replacementId: selected?.value })}
-              placeholder="Выберите замену..."
-              isClearable
-            />
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '20px' }}>
-              <button onClick={closeDialog}>Отмена</button>
-              <button onClick={confirmReplace} style={{ background: '#e74c3c', color: 'white' }}>Заменить в выбранных и удалить</button>
+            
+            <div style={{ marginBottom: '20px', padding: '12px', background: '#fff3cd', borderRadius: '8px', borderLeft: '4px solid #ffc107' }}>
+              <strong>⚠️ Внимание!</strong> У этого сборщика есть <strong>{deleteDialog.points.length}</strong> связанных точек.
+              Выберите нового сборщика для замены в выбранных точках.
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <h4 style={{ marginBottom: '10px' }}>📋 Точки сборщика:</h4>
+              <div style={{ 
+                maxHeight: '300px', 
+                overflow: 'auto', 
+                border: '1px solid #ddd', 
+                borderRadius: '8px',
+                background: '#fafafa'
+              }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead style={{ position: 'sticky', top: 0, background: '#f0f0f0', zIndex: 1 }}>
+                    <tr style={{ borderBottom: '2px solid #ddd' }}>
+                      <th style={{ width: '40px', padding: '10px', textAlign: 'center' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={selectedPoints.size === deleteDialog.points.length && deleteDialog.points.length > 0}
+                          onChange={selectAllPoints}
+                        />
+                      </th>
+                      <th style={{ padding: '10px', textAlign: 'left' }}>Точка</th>
+                      <th style={{ padding: '10px', textAlign: 'left', width: '120px' }}>Дата</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {deleteDialog.points.map(p => (
+                      <tr key={p.guid} style={{ borderBottom: '1px solid #eee' }}>
+                        <td style={{ padding: '10px', textAlign: 'center' }}>
+                          <input 
+                            type="checkbox" 
+                            checked={selectedPoints.has(p.guid)} 
+                            onChange={() => togglePoint(p.guid)}
+                          />
+                        </td>
+                        <td style={{ padding: '10px' }}>{p.location_original || '—'}</td>
+                        <td style={{ padding: '10px' }}>{p.display_date || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <h4 style={{ marginBottom: '10px' }}>👤 Выберите нового сборщика для замены:</h4>
+              <div style={{ 
+                maxHeight: '250px', 
+                overflow: 'auto', 
+                border: '1px solid #ddd', 
+                borderRadius: '8px',
+                background: '#fafafa'
+              }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead style={{ position: 'sticky', top: 0, background: '#f0f0f0', zIndex: 1 }}>
+                    <tr style={{ borderBottom: '2px solid #ddd' }}>
+                      <th style={{ width: '40px', padding: '10px', textAlign: 'center' }}>✓</th>
+                      <th style={{ padding: '10px', textAlign: 'left' }}>Сборщик</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {collectors
+                      .filter(c => c.guid !== deleteDialog.collector.guid)
+                      .map(c => (
+                        <tr 
+                          key={c.guid} 
+                          style={{ 
+                            borderBottom: '1px solid #eee',
+                            backgroundColor: selectedReplacement === c.guid ? '#e3f2fd' : 'transparent',
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => setSelectedReplacement(c.guid)}
+                        >
+                          <td style={{ padding: '10px', textAlign: 'center' }}>
+                            <input 
+                              type="radio" 
+                              name="replacement"
+                              checked={selectedReplacement === c.guid}
+                              onChange={() => setSelectedReplacement(c.guid)}
+                            />
+                          </td>
+                          <td style={{ padding: '10px' }}>
+                            <strong>{c.display_name}</strong>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+              {collectors.filter(c => c.guid !== deleteDialog.collector.guid).length === 0 && (
+                <div style={{ padding: '20px', textAlign: 'center', color: '#999', background: '#f9f9f9', borderRadius: '8px' }}>
+                  Нет других сборщиков для замены. Сначала создайте нового.
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '15px', justifyContent: 'flex-end', marginTop: '20px', paddingTop: '15px', borderTop: '1px solid #ddd' }}>
+              <IconButton icon="Close" label="Отмена" onClick={closeDialog} style={{ background: '#95a5a6', color: 'white', padding: '10px 20px' }} />
+              <IconButton 
+                icon="Delete" 
+                label={`Заменить в ${selectedPoints.size} точках и удалить`} 
+                onClick={confirmReplace} 
+                disabled={!selectedReplacement || selectedPoints.size === 0}
+                style={{ background: '#e74c3c', color: 'white', padding: '10px 20px' }} 
+              />
             </div>
           </div>
         </div>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { IconButton } from './IconLibrary';
 
 const API_URL = 'http://127.0.0.1:8000';
 
@@ -25,7 +26,6 @@ const TaxonManager = ({ onClose, onUpdate }) => {
   const fetchTaxa = async () => {
     try {
       const res = await axios.get(`${API_URL}/taxa`);
-      // Сортируем по названию (род, затем вид)
       const sorted = res.data.sort((a, b) => {
         const nameA = `${a.genus} ${a.species || ''}`.toLowerCase();
         const nameB = `${b.genus} ${b.species || ''}`.toLowerCase();
@@ -62,7 +62,6 @@ const TaxonManager = ({ onClose, onUpdate }) => {
       return;
     }
     
-    // Проверка уникальности
     const displayName = formData.display_name || `${formData.genus} ${formData.species || ''} ${formData.subspecies || ''}`.trim();
     const existingTaxon = !editingGuid && taxa.find(t => 
       t.genus.toLowerCase() === formData.genus.toLowerCase() &&
@@ -149,7 +148,7 @@ const TaxonManager = ({ onClose, onUpdate }) => {
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <h2 style={{ margin: 0 }}>{editingGuid ? 'Редактировать таксон' : 'Новый таксон'}</h2>
-          <button onClick={() => { resetForm(); onClose(); }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '20px', color: '#e74c3c' }}>✖️</button>
+          <IconButton icon="Close" onClick={() => { resetForm(); onClose(); }} style={{ padding: '4px', fontSize: '18px' }} />
         </div>
         
         <form onSubmit={handleSubmit}>
@@ -196,8 +195,8 @@ const TaxonManager = ({ onClose, onUpdate }) => {
           </div>
           
           <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '20px' }}>
-            <button type="button" onClick={() => { resetForm(); onClose(); }} style={{ padding: '8px 16px', background: '#95a5a6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Отмена</button>
-            <button type="submit" style={{ padding: '8px 16px', background: '#27ae60', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Сохранить</button>
+            <IconButton icon="Close" label="Отмена" onClick={() => { resetForm(); onClose(); }} style={{ background: '#95a5a6', color: 'white' }} />
+            <IconButton icon="Save" label="Сохранить" type="submit" style={{ background: '#27ae60', color: 'white' }} />
           </div>
         </form>
         
@@ -219,9 +218,9 @@ const TaxonManager = ({ onClose, onUpdate }) => {
                         <strong>{t.genus}</strong> {t.species || ''} {t.subspecies || ''}
                       </td>
                       <td style={{ padding: '8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                        <button onClick={() => handleEdit(t)} style={{ marginRight: '5px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px' }} title="Редактировать">✏️</button>
-                        <button onClick={() => loadSources(t.guid, t.display_name)} style={{ marginRight: '5px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#9b59b6' }} title="Источники">📚</button>
-                        <button onClick={() => handleDelete(t.guid)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#e74c3c' }} title="Удалить">🗑️</button>
+                        <IconButton icon="Edit" onClick={() => handleEdit(t)} title="Редактировать" />
+                        <IconButton icon="Study" onClick={() => loadSources(t.guid, t.display_name)} title="Источники" style={{ color: '#9b59b6' }} />
+                        <IconButton icon="Delete" onClick={() => handleDelete(t.guid)} title="Удалить" style={{ color: '#e74c3c' }} />
                       </td>
                     </tr>
                   ))}
@@ -231,6 +230,7 @@ const TaxonManager = ({ onClose, onUpdate }) => {
           </div>
         )}
 
+        {/* Модальные окна остаются без изменений */}
         {showStudyDialog && selectedStudy && (
           <div style={{
             position: 'fixed',
@@ -265,7 +265,7 @@ const TaxonManager = ({ onClose, onUpdate }) => {
                 </div>
               )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
-                <button onClick={() => setShowStudyDialog(false)} style={{ padding: '8px 16px', background: '#95a5a6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Закрыть</button>
+                <IconButton icon="Close" label="Закрыть" onClick={() => setShowStudyDialog(false)} style={{ background: '#95a5a6', color: 'white' }} />
               </div>
             </div>
           </div>
@@ -318,7 +318,7 @@ const TaxonManager = ({ onClose, onUpdate }) => {
                 </div>
               )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
-                <button onClick={() => setShowSourcesDialog(false)} style={{ padding: '8px 16px', background: '#95a5a6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Закрыть</button>
+                <IconButton icon="Close" label="Закрыть" onClick={() => setShowSourcesDialog(false)} style={{ background: '#95a5a6', color: 'white' }} />
               </div>
             </div>
           </div>
