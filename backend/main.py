@@ -6,31 +6,13 @@ import requests
 from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
-from sqlalchemy import create_engine, Index, func, Column, String, Integer, Float, Text, ForeignKey
+from sqlalchemy import create_engine, Column, String, Integer, Float, Text, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
-def parse_dms_coordinate(coord_str):
-    """Парсит DMS координату через эндпоинт /parse/dms"""
-    if not coord_str or not isinstance(coord_str, str):
-        return None, None
-    if '°' not in coord_str:
-        try:
-            return float(coord_str), None
-        except:
-            return None, None
-    try:
-        response = requests.post("http://127.0.0.1:8000/parse/dms", json={"dms": coord_str})
-        if response.status_code == 200:
-            data = response.json()
-            decimal = data.get("decimal")
-            return decimal, coord_str if decimal else None
-    except Exception as e:
-        print(f"Ошибка парсинга DMS: {e}")
-    return None, None
-
-
+# ========== ПАРСИНГ КООРДИНАТ ==========
 def parse_coordinate_dms(coord_str):
     if coord_str is None:
         return None
@@ -77,6 +59,20 @@ def parse_coordinate(coord):
     except:
         return None
 
+def decimal_to_dms_advanced(decimal, is_lat=True):
+    if decimal is None:
+        return None
+    degrees = int(abs(decimal))
+    minutes_full = (abs(decimal) - degrees) * 60
+    minutes = int(minutes_full)
+    seconds = (minutes_full - minutes) * 60
+    if is_lat:
+        direction = 'N' if decimal >= 0 else 'S'
+    else:
+        direction = 'E' if decimal >= 0 else 'W'
+    return f"{degrees}°{minutes:02d}'{seconds:.1f}{direction}"
+
+# ========== БАЗА ДАННЫХ ==========
 SQLALCHEMY_DATABASE_URL = "sqlite:///./entomo.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -85,6 +81,7 @@ Base = declarative_base()
 def generate_uuid():
     return str(uuid.uuid4())
 
+# ========== МОДЕЛИ ==========
 class Person(Base):
     __tablename__ = "persons"
     guid = Column(String, primary_key=True, default=generate_uuid)
@@ -99,31 +96,38 @@ class Point(Base):
     longitude = Column(Float, nullable=True)
     latitude_dms = Column(String, nullable=True)
     longitude_dms = Column(String, nullable=True)
-    geocoding_status = Column(String, default="pending")
-    date_text = Column(String, nullable=True)
-    date_start = Column(String, nullable=True)
-    date_end = Column(String, nullable=True)
     location_original = Column(Text, nullable=True)
-    location_structured = Column(Text, nullable=True)
-    google_maps_url = Column(String, nullable=True)
-    elevation = Column(Integer, nullable=True)
-    location_author_guid = Column(String, ForeignKey("persons.guid"), nullable=True)
+    date_text = Column(String, nullable=True)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
 
-class Taxon(Base):
-    __tablename__ = "taxa"
+class Species(Base):
+    __tablename__ = "species"
     guid = Column(String, primary_key=True, default=generate_uuid)
     genus = Column(String, nullable=False)
-    species = Column(String, nullable=True)
-    subspecies = Column(String, nullable=True)
+    species_name = Column(String, nullable=False)
     display_name = Column(String, nullable=True)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
 
-    __table_args__ = (
-        Index("ix_taxa_genus_species", "genus", "species"),
-    )
+class Subspecies(Base):
+    __tablename__ = "subspecies"
+    guid = Column(String, primary_key=True, default=generate_uuid)
+    species_guid = Column(String, ForeignKey("species.guid"), nullable=False)
+    subspecies_name = Column(String, nullable=False)
+    display_name = Column(String, nullable=True)
+    created_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
+
+class Study(Base):
+    __tablename__ = "studies"
+    guid = Column(String, primary_key=True, default=generate_uuid)
+    title = Column(String, nullable=True)
+    url = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    authors = Column(String, nullable=True)
+    created_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
 
 class Link(Base):
     __tablename__ = "links"
@@ -135,18 +139,6 @@ class Link(Base):
     relation_type = Column(String, nullable=False)
     direction = Column(String, nullable=False)
     is_directed = Column(Integer, default=1)
-    description = Column(String, nullable=True)
-    context = Column(String, nullable=True)
-    created_at = Column(String, nullable=False)
-    updated_at = Column(String, nullable=False)
-
-class Study(Base):
-    __tablename__ = "studies"
-    guid = Column(String, primary_key=True, default=generate_uuid)
-    title = Column(String, nullable=True)
-    url = Column(String, nullable=True)
-    description = Column(Text, nullable=True)
-    authors = Column(String, nullable=True)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
 
@@ -166,189 +158,76 @@ def parse_dms_endpoint(request_data: dict):
         return {"error": "Invalid DMS format", "input": dms_string}
     return {"decimal": result, "original": dms_string}
 
-def decimal_to_dms(decimal):
-    if decimal is None:
-        return None
-    degrees = int(abs(decimal))
-    minutes_full = (abs(decimal) - degrees) * 60
-    minutes = int(minutes_full)
-    seconds = (minutes_full - minutes) * 60
-    return f"{degrees}°{minutes:02d}'{seconds:.1f}\""
-
-def format_coordinates(lat, lon):
-    if lat is None or lon is None:
-        return None, None
-    lat_dir = "N" if lat >= 0 else "S"
-    lon_dir = "E" if lon >= 0 else "W"
-    return f"{decimal_to_dms(lat)}{lat_dir}", f"{decimal_to_dms(lon)}{lon_dir}"
-
-def decimal_to_dms_advanced(decimal, is_lat=True):
-    if decimal is None:
-        return None
-    degrees = int(abs(decimal))
-    minutes_full = (abs(decimal) - degrees) * 60
-    minutes = int(minutes_full)
-    seconds = (minutes_full - minutes) * 60
-    if is_lat:
-        direction = 'N' if decimal >= 0 else 'S'
-    else:
-        direction = 'E' if decimal >= 0 else 'W'
-    return f"{degrees}°{minutes:02d}'{seconds:.1f}{direction}"
-
-# ========== ТОЧКИ ==========
-@app.get("/points")
-def get_points():
+# ========== ВИДЫ ==========
+@app.get("/species")
+def get_species():
     db = SessionLocal()
-    points = db.query(Point).all()
-    result = []
-    for p in points:
-        lat_dms, lon_dms = format_coordinates(p.latitude, p.longitude)
-        link = db.query(Link).filter(
-            Link.to_guid == p.guid,
-            Link.from_type == "person",
-            Link.relation_type == "collected_at"
-        ).first()
-        collector_name = None
-        if link:
-            person = db.query(Person).filter(Person.guid == link.from_guid).first()
-            if person:
-                collector_name = person.display_name
-        result.append({
-            "guid": p.guid,
-            "latitude": p.latitude,
-            "longitude": p.longitude,
-            "latitude_dms": lat_dms,
-            "longitude_dms": lon_dms,
-            "location_original": p.location_original,
-            "date_text": p.date_text,
-            "display_date": p.date_text,
-            "collector_name": collector_name,
-            "date_start": p.date_start,
-            "date_end": p.date_end,
-        })
+    species = db.query(Species).all()
     db.close()
-    return result
+    return [{"guid": s.guid, "genus": s.genus, "species_name": s.species_name, "display_name": s.display_name} for s in species]
 
-@app.get("/points/{guid}")
-def get_point(guid: str):
-    db = SessionLocal()
-    point = db.query(Point).filter(Point.guid == guid).first()
-    if not point:
-        raise HTTPException(404, "Point not found")
-    db.close()
-    return {
-        "guid": point.guid,
-        "latitude": point.latitude,
-        "longitude": point.longitude,
-        "location_original": point.location_original,
-        "date_text": point.date_text,
-        "date_start": point.date_start,
-        "date_end": point.date_end,
-    }
-
-class StudyCreate(BaseModel):
-    title: Optional[str] = None
-    url: Optional[str] = None
-    description: Optional[str] = None
-    authors: Optional[str] = None
-
-class PointCreate(BaseModel):
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-    location_original: Optional[str] = None
-    location_structured: Optional[str] = None
-    google_maps_url: Optional[str] = None
-    date_start: Optional[str] = None
-    date_end: Optional[str] = None
-    date_text: Optional[str] = None
-    collector_name: str
-    coord_string: Optional[str] = None
-
-@app.post("/points/create")
-def create_point(point: PointCreate):
+@app.post("/species")
+def create_species(genus: str, species_name: str, display_name: Optional[str] = None):
     db = SessionLocal()
     now = datetime.now().isoformat()
-    lat = parse_coordinate(point.latitude)
-    lon = parse_coordinate(point.longitude)
-    lat_dms = decimal_to_dms_advanced(lat, is_lat=True) if lat is not None else None
-    lon_dms = decimal_to_dms_advanced(lon, is_lat=False) if lon is not None else None
-    person = db.query(Person).filter(Person.display_name == point.collector_name).first()
-    if not person:
-        person = Person(display_name=point.collector_name, created_at=now, updated_at=now)
-        db.add(person)
-        db.flush()
-    db_point = Point(
-        latitude=lat, longitude=lon, latitude_dms=lat_dms, longitude_dms=lon_dms,
-        location_original=point.location_original, location_structured=point.location_structured,
-        google_maps_url=point.google_maps_url, date_start=point.date_start,
-        date_end=point.date_end, date_text=point.date_text,
+    
+    existing = db.query(Species).filter(
+        Species.genus == genus.strip().capitalize(),
+        Species.species_name == species_name.strip().lower()
+    ).first()
+    
+    if existing:
+        db.close()
+        return {"guid": existing.guid, "existing": True}
+    
+    new_species = Species(
+        genus=genus.strip().capitalize(),
+        species_name=species_name.strip().lower(),
+        display_name=display_name or f"{genus} {species_name}",
         created_at=now, updated_at=now
     )
-    db.add(db_point)
-    db.flush()
-    link = Link(
-        from_guid=person.guid, to_guid=db_point.guid,
-        from_type="person", to_type="point", relation_type="collected_at",
-        direction="one_to_many", is_directed=1,
-        created_at=now, updated_at=now
-    )
-    db.add(link)
-    point_guid = db_point.guid
+    db.add(new_species)
     db.commit()
+    guid = new_species.guid
     db.close()
-    return {"guid": point_guid}
+    return {"guid": guid, "existing": False}
 
-@app.put("/points/{guid}")
-def update_point(guid: str, point: PointCreate):
+# ========== ПОДВИДЫ ==========
+@app.get("/subspecies")
+def get_subspecies(species_guid: Optional[str] = None):
+    db = SessionLocal()
+    query = db.query(Subspecies)
+    if species_guid:
+        query = query.filter(Subspecies.species_guid == species_guid)
+    subspecies = query.all()
+    db.close()
+    return [{"guid": s.guid, "species_guid": s.species_guid, "subspecies_name": s.subspecies_name, "display_name": s.display_name} for s in subspecies]
+
+@app.post("/subspecies")
+def create_subspecies(species_guid: str, subspecies_name: str, display_name: Optional[str] = None):
     db = SessionLocal()
     now = datetime.now().isoformat()
-    db_point = db.query(Point).filter(Point.guid == guid).first()
-    if not db_point:
-        raise HTTPException(404, "Point not found")
-    lat = parse_coordinate(point.latitude)
-    lon = parse_coordinate(point.longitude)
-    lat_dms = decimal_to_dms_advanced(lat, is_lat=True) if lat is not None else None
-    lon_dms = decimal_to_dms_advanced(lon, is_lat=False) if lon is not None else None
-    db_point.latitude = lat
-    db_point.longitude = lon
-    db_point.latitude_dms = lat_dms
-    db_point.longitude_dms = lon_dms
-    db_point.location_original = point.location_original
-    db_point.location_structured = point.location_structured
-    db_point.google_maps_url = point.google_maps_url
-    db_point.date_start = point.date_start
-    db_point.date_end = point.date_end
-    db_point.date_text = point.date_text
-    db_point.updated_at = now
-    new_person = db.query(Person).filter(Person.display_name == point.collector_name).first()
-    if not new_person:
-        new_person = Person(display_name=point.collector_name, created_at=now, updated_at=now)
-        db.add(new_person)
-        db.flush()
-    db.query(Link).filter(
-        Link.to_guid == guid,
-        Link.from_type == "person",
-        Link.relation_type == "collected_at"
-    ).delete()
-    link = Link(
-        from_guid=new_person.guid, to_guid=guid,
-        from_type="person", to_type="point", relation_type="collected_at",
-        direction="one_to_many", is_directed=1,
+    
+    existing = db.query(Subspecies).filter(
+        Subspecies.species_guid == species_guid,
+        Subspecies.subspecies_name == subspecies_name.strip().lower()
+    ).first()
+    
+    if existing:
+        db.close()
+        return {"guid": existing.guid, "existing": True}
+    
+    new_subspecies = Subspecies(
+        species_guid=species_guid,
+        subspecies_name=subspecies_name.strip().lower(),
+        display_name=display_name or subspecies_name,
         created_at=now, updated_at=now
     )
-    db.add(link)
+    db.add(new_subspecies)
     db.commit()
+    guid = new_subspecies.guid
     db.close()
-    return {"message": "Updated"}
-
-@app.delete("/points/{guid}")
-def delete_point(guid: str):
-    db = SessionLocal()
-    db.query(Link).filter(Link.to_guid == guid).delete()
-    db.query(Point).filter(Point.guid == guid).delete()
-    db.commit()
-    db.close()
-    return {"message": "Deleted"}
+    return {"guid": guid, "existing": False}
 
 # ========== СБОРЩИКИ ==========
 @app.get("/persons")
@@ -358,34 +237,22 @@ def get_persons():
     db.close()
     return [{"guid": p.guid, "display_name": p.display_name} for p in persons]
 
-@app.get("/persons/{guid}")
-def get_person(guid: str):
-    db = SessionLocal()
-    person = db.query(Person).filter(Person.guid == guid).first()
-    if not person:
-        raise HTTPException(404, "Person not found")
-    db.close()
-    return {"guid": person.guid, "display_name": person.display_name}
-
 @app.post("/persons")
 def create_person(display_name: str):
     db = SessionLocal()
     now = datetime.now().isoformat()
     
-    # Проверка на существующего сборщика
-    existing_person = db.query(Person).filter(Person.display_name.ilike(display_name)).first()
-    
-    if existing_person:
+    existing = db.query(Person).filter(Person.display_name.ilike(display_name)).first()
+    if existing:
         db.close()
-        return {"guid": existing_person.guid, "message": "Сборщик уже существует", "existing": True}
+        return {"guid": existing.guid, "existing": True}
     
     person = Person(display_name=display_name, created_at=now, updated_at=now)
     db.add(person)
     db.commit()
-    person_guid = person.guid
+    guid = person.guid
     db.close()
-    return {"guid": person_guid, "message": "Сборщик создан", "existing": False}
-
+    return {"guid": guid, "existing": False}
 
 @app.put("/persons/{guid}")
 def update_person(guid: str, display_name: str):
@@ -400,34 +267,18 @@ def update_person(guid: str, display_name: str):
     return {"message": "Updated"}
 
 @app.delete("/persons/{guid}")
-def delete_person(guid: str, replace_with: Optional[str] = None):
+def delete_person(guid: str):
     db = SessionLocal()
     person = db.query(Person).filter(Person.guid == guid).first()
     if not person:
         raise HTTPException(404, "Person not found")
-    links = db.query(Link).filter(
-        Link.from_guid == guid,
-        Link.from_type == "person",
-        Link.relation_type == "collected_at"
-    ).all()
-    point_guids = [link.to_guid for link in links]
-    if replace_with:
-        new_person = db.query(Person).filter(Person.display_name == replace_with).first()
-        if not new_person:
-            new_person = Person(display_name=replace_with, created_at=datetime.now().isoformat(), updated_at=datetime.now().isoformat())
-            db.add(new_person)
-            db.flush()
-        for link in links:
-            link.from_guid = new_person.guid
-            link.updated_at = datetime.now().isoformat()
-    else:
-        for link in links:
-            db.delete(link)
+    
+    # Удаляем связи
     db.query(Link).filter((Link.from_guid == guid) | (Link.to_guid == guid)).delete()
     db.delete(person)
     db.commit()
     db.close()
-    return {"message": "Deleted", "affected_points": len(point_guids)}
+    return {"message": "Deleted"}
 
 @app.get("/persons/{guid}/points")
 def get_person_points(guid: str):
@@ -449,449 +300,45 @@ def get_person_points(guid: str):
     db.close()
     return points
 
-# ========== ТАКСОНЫ ==========
-@app.get("/taxa")
-def get_taxa():
-    db = SessionLocal()
-    taxa = db.query(Taxon).all()
-    db.close()
-    return [{"guid": t.guid, "genus": t.genus, "species": t.species, "subspecies": t.subspecies, "display_name": t.display_name} for t in taxa]
-
-@app.post("/taxa")
-def create_taxon(genus: str, species: Optional[str] = None, subspecies: Optional[str] = None, display_name: Optional[str] = None):
-    db = SessionLocal()
-    now = datetime.now().isoformat()
-    
-    genus_norm = genus.strip().capitalize()
-    species_norm = species.strip().lower() if species else None
-    subspecies_norm = subspecies.strip().lower() if subspecies else None
-    
-    existing_taxon = db.query(Taxon).filter(
-        func.lower(Taxon.genus) == func.lower(genus_norm),
-        func.lower(Taxon.species) == func.lower(species_norm) if species_norm else Taxon.species.is_(None)
-    ).first()
-    
-    if existing_taxon:
-        db.close()
-        return {"guid": existing_taxon.guid, "message": "Таксон уже существует", "existing": True}
-    
-    if not display_name:
-        display_name = genus_norm + (f" {species_norm}" if species_norm else "") + (f" {subspecies_norm}" if subspecies_norm else "")
-    
-    taxon = Taxon(
-        genus=genus_norm,
-        species=species_norm,
-        subspecies=subspecies_norm,
-        display_name=display_name,
-        created_at=now, updated_at=now
-    )
-    db.add(taxon)
-    db.commit()
-    taxon_guid = taxon.guid
-    db.close()
-    return {"guid": taxon_guid, "message": "Таксон создан", "existing": False}
-
-@app.put("/taxa/{guid}")
-def update_taxon(guid: str, genus: str, species: Optional[str] = None, subspecies: Optional[str] = None, display_name: Optional[str] = None):
-    db = SessionLocal()
-    taxon = db.query(Taxon).filter(Taxon.guid == guid).first()
-    if not taxon:
-        db.close()
-        raise HTTPException(404, "Taxon not found")
-    
-    genus_norm = genus.strip().capitalize()
-    species_norm = species.strip().lower() if species else None
-    subspecies_norm = subspecies.strip().lower() if subspecies else None
-    
-    # Проверка на дубликат при обновлении
-    existing = db.query(Taxon).filter(
-        func.lower(Taxon.genus) == func.lower(genus_norm),
-        func.lower(Taxon.species) == func.lower(species_norm) if species_norm else Taxon.species.is_(None),
-        Taxon.guid != guid
-    ).first()
-    
-    if existing:
-        db.close()
-        raise HTTPException(400, f"Таксон {existing.genus} {existing.species or ''} уже существует")
-    
-    taxon.genus = genus_norm
-    taxon.species = species_norm
-    taxon.subspecies = subspecies_norm
-    taxon.display_name = display_name or genus_norm + (f" {species_norm}" if species_norm else "") + (f" {subspecies_norm}" if subspecies_norm else "")
-    taxon.updated_at = datetime.now().isoformat()
-    
-    db.commit()
-    db.close()
-    return {"message": "Updated"}
-
-@app.delete("/taxa/{guid}")
-def delete_taxon(guid: str):
-    db = SessionLocal()
-    db.query(Link).filter((Link.from_guid == guid) | (Link.to_guid == guid)).delete()
-    db.query(Taxon).filter(Taxon.guid == guid).delete()
-    db.commit()
-    db.close()
-    return {"message": "Deleted"}
-
-@app.get("/taxa/search")
-def search_taxa(q: str = ""):
-    db = SessionLocal()
-    taxa = db.query(Taxon).filter(
-        (Taxon.genus.contains(q)) | (Taxon.species.contains(q)) | (Taxon.display_name.contains(q))
-    ).limit(20).all()
-    db.close()
-    return [{"guid": t.guid, "genus": t.genus, "species": t.species, "display_name": t.display_name} for t in taxa]
-
-# ========== СВЯЗИ ТОЧКА-ТАКСОН ==========
-@app.get("/point_taxa/{point_guid}")
-def get_point_taxa(point_guid: str):
-    db = SessionLocal()
-    links = db.query(Link).filter(
-        Link.to_guid == point_guid,
-        Link.from_type == "taxon"
-    ).all()
-    taxa = []
-    for link in links:
-        taxon = db.query(Taxon).filter(Taxon.guid == link.from_guid).first()
-        if taxon:
-            taxa.append({
-                "guid": taxon.guid,
-                "genus": taxon.genus,
-                "species": taxon.species,
-                "display_name": taxon.display_name
-            })
-    db.close()
-    return taxa
-
-@app.post("/point_taxa/{point_guid}/{taxon_guid}")
-def add_taxon_to_point(point_guid: str, taxon_guid: str):
-    db = SessionLocal()
-    now = datetime.now().isoformat()
-    existing = db.query(Link).filter(
-        Link.from_guid == taxon_guid,
-        Link.to_guid == point_guid,
-        Link.from_type == "taxon",
-        Link.to_type == "point"
-    ).first()
-    if existing:
-        db.close()
-        return {"message": "Already linked"}
-    link = Link(
-        link_guid=generate_uuid(),
-        from_guid=taxon_guid,
-        to_guid=point_guid,
-        from_type="taxon",
-        to_type="point",
-        relation_type="has_taxon",
-        direction="many_to_many",
-        is_directed=1,
-        created_at=now,
-        updated_at=now
-    )
-    db.add(link)
-    db.commit()
-    db.close()
-    return {"message": "Linked"}
-
-@app.delete("/point_taxa/{point_guid}/{taxon_guid}")
-def remove_taxon_from_point(point_guid: str, taxon_guid: str):
-    db = SessionLocal()
-    link = db.query(Link).filter(
-        Link.from_guid == taxon_guid,
-        Link.to_guid == point_guid,
-        Link.from_type == "taxon",
-        Link.to_type == "point"
-    ).first()
-    if link:
-        db.delete(link)
-        db.commit()
-    db.close()
-    return {"message": "Unlinked"}
-
-# ========== ГРАФОВЫЕ ЭНДПОИНТЫ ==========
-@app.get("/objects/{type}/{guid}/links")
-def get_object_links(type: str, guid: str):
-    db = SessionLocal()
-    try:
-        outgoing = db.query(Link).filter(
-            Link.from_guid == guid,
-            Link.from_type == type
-        ).all()
-        incoming = db.query(Link).filter(
-            Link.to_guid == guid,
-            Link.to_type == type
-        ).all()
-        result = []
-        for link in outgoing:
-            result.append({
-                "link_guid": link.link_guid,
-                "relation_type": link.relation_type,
-                "target_type": link.to_type,
-                "target_guid": link.to_guid,
-                "direction": "outgoing"
-            })
-        for link in incoming:
-            result.append({
-                "link_guid": link.link_guid,
-                "relation_type": link.relation_type,
-                "target_type": link.from_type,
-                "target_guid": link.from_guid,
-                "direction": "incoming"
-            })
-        return result
-    finally:
-        db.close()
-
-@app.get("/search")
-def search_objects(q: str = "", type: Optional[str] = None, limit: int = 20):
-    db = SessionLocal()
-    results = []
-    if not type or type == "person":
-        persons = db.query(Person).filter(Person.display_name.contains(q)).limit(limit).all()
-        for p in persons:
-            results.append({"type": "person", "guid": p.guid, "name": p.display_name})
-    if not type or type == "taxon":
-        taxa = db.query(Taxon).filter((Taxon.genus.contains(q)) | (Taxon.species.contains(q)) | (Taxon.display_name.contains(q))).limit(limit).all()
-        for t in taxa:
-            results.append({"type": "taxon", "guid": t.guid, "name": t.display_name})
-    if not type or type == "point":
-        points = db.query(Point).filter(Point.location_original.contains(q)).limit(limit).all()
-        for p in points:
-            results.append({"type": "point", "guid": p.guid, "name": p.location_original or "Точка"})
-    db.close()
-    return results
-
-# ========== ИМПОРТ ==========
-@app.post("/import/text")
-async def import_text(file: UploadFile = File(...)):
-    content = await file.read()
-    text = content.decode('utf-8')
-    lines = text.strip().split('\n')
-    db = SessionLocal()
-    imported = []
-    now = datetime.now().isoformat()
-    for line in lines:
-        if not line.strip():
-            continue
-        match = re.search(r'leg\.\s+([A-Z]\.?\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', line)
-        collector = match.group(1).strip() if match else "Неизвестный"
-        date_match = re.search(r'(\d{1,2}\.\w{1,3}\.?\d{4})', line)
-        date_text = date_match.group(1) if date_match else None
-        coord_pattern = r'([NS]\d{1,3}°\d{1,2}\'[\d.]+"[EW]?\s+[EW]\d{1,3}°\d{1,2}\'[\d.]+"[EW]?)'
-        coord_match = re.search(coord_pattern, line)
-        lat = lon = None
-        if coord_match:
-            coords = coord_match.group(1)
-            coord_pattern2 = r'([NS])(\d{1,3})°(\d{1,2})\'([\d.]+)"?\s*([EW])(\d{1,3})°(\d{1,2})\'([\d.]+)"?'
-            m = re.search(coord_pattern2, coords)
-            if m:
-                lat_dir, lat_deg, lat_min, lat_sec, lon_dir, lon_deg, lon_min, lon_sec = m.groups()
-                lat = (float(lat_deg) + float(lat_min)/60 + float(lat_sec)/3600)
-                lat = lat if lat_dir == 'N' else -lat
-                lon = (float(lon_deg) + float(lon_min)/60 + float(lon_sec)/3600)
-                lon = lon if lon_dir == 'E' else -lon
-        location_original = re.sub(r'\d{1,2}\.\w{1,3}\.?\d{4}', '', line)
-        location_original = re.sub(r'leg\..*$', '', location_original)
-        location_original = re.sub(coord_pattern, '', location_original)
-        location_original = re.sub(r'\s+', ' ', location_original).strip()
-        person = db.query(Person).filter(Person.display_name == collector).first()
-        if not person:
-            person = Person(display_name=collector, created_at=now, updated_at=now)
-            db.add(person)
-            db.flush()
-        lat_dms = decimal_to_dms_advanced(lat, is_lat=True) if lat is not None else None
-        lon_dms = decimal_to_dms_advanced(lon, is_lat=False) if lon is not None else None
-        point = Point(
-            location_original=location_original,
-            date_text=date_text,
-            latitude=lat, longitude=lon,
-            latitude_dms=lat_dms, longitude_dms=lon_dms,
-            created_at=now, updated_at=now
-        )
-        db.add(point)
-        db.flush()
-        link = Link(
-            from_guid=person.guid, to_guid=point.guid,
-            from_type="person", to_type="point", relation_type="collected_at",
-            direction="one_to_many", is_directed=1,
-            created_at=now, updated_at=now
-        )
-        db.add(link)
-        imported.append({"location": location_original, "date": date_text, "collector": collector, "latitude": lat, "longitude": lon})
-    db.commit()
-    db.close()
-    return {"message": f"Импортировано {len(imported)} записей", "imported": imported}
-
-def parse_taxon_fullname(fullname: str) -> dict:
-    if not fullname or not fullname.strip():
-        return {"genus": None, "species": None, "subspecies": None, "display_name": None}
-    name = fullname.strip()
-    genus_match = re.match(r'^([A-Z][a-z]+)', name)
-    genus = genus_match.group(1) if genus_match else name.split()[0] if name.split() else None
-    without_subgenus = re.sub(r'\s*\([^)]+\)\s*', ' ', name)
-    parts = without_subgenus.split()
-    species = parts[1] if len(parts) >= 2 else None
-    subspecies = parts[2] if len(parts) >= 3 else None
-    if species:
-        species = re.sub(r'[^\w\-]', '', species)
-    if subspecies:
-        subspecies = re.sub(r'[^\w\-]', '', subspecies)
-    return {
-        "genus": genus.capitalize() if genus else None,
-        "species": species.lower() if species else None,
-        "subspecies": subspecies.lower() if subspecies else None,
-        "display_name": name
-    }
-
-@app.post("/import/parse-file")
-async def parse_import_file(file: UploadFile = File(...)):
-    content = await file.read()
-    text = content.decode('utf-8')
-    filename = file.filename.lower()
-    rows = []
-    errors = []
-    
-    if filename.endswith('.csv'):
-        csv_reader = csv.DictReader(io.StringIO(text))
-        for row in csv_reader:
-            # Парсим координаты через эндпоинт /parse/dms
-            lat_str = row.get("latitude", "")
-            lon_str = row.get("longitude", "")
-            
-            lat_decimal = None
-            lon_decimal = None
-            lat_dms = None
-            lon_dms = None
-            
-            # Парсим широту
-            if lat_str and '°' in str(lat_str):
-                try:
-                    resp = requests.post("http://127.0.0.1:8000/parse/dms", json={"dms": lat_str})
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        lat_decimal = data.get('decimal')
-                        lat_dms = lat_str
-                except Exception as e:
-                    errors.append({"row": len(rows) + 2, "error": f"Ошибка парсинга широты: {str(e)}"})
-            else:
-                try:
-                    lat_decimal = float(lat_str) if lat_str else None
-                except:
-                    pass
-            
-            # Парсим долготу
-            if lon_str and '°' in str(lon_str):
-                try:
-                    resp = requests.post("http://127.0.0.1:8000/parse/dms", json={"dms": lon_str})
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        lon_decimal = data.get('decimal')
-                        lon_dms = lon_str
-                except Exception as e:
-                    errors.append({"row": len(rows) + 2, "error": f"Ошибка парсинга долготы: {str(e)}"})
-            else:
-                try:
-                    lon_decimal = float(lon_str) if lon_str else None
-                except:
-                    pass
-            
-            rows.append({
-                "latitude": lat_decimal,
-                "longitude": lon_decimal,
-                "latitude_dms": lat_dms,
-                "longitude_dms": lon_dms,
-                "location_original": row.get("location_original", ""),
-                "date_text": row.get("date_text", ""),
-                "collector_name": row.get("collector_name", ""),
-                "genus": row.get("genus", ""),
-                "species": row.get("species", ""),
-                "subspecies": row.get("subspecies", ""),
-                "display_name": row.get("display_name", ""),
-                "notes": row.get("notes", ""),
-                "source": row.get("source", "")
-            })
-    else:
-        # ... остальной код для TXT файлов ...
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            if '°' in line:
-                coords_line = line
-                taxon_line = lines[i+1] if i+1 < len(lines) else ''
-                notes_line = lines[i+2] if i+2 < len(lines) and '°' not in lines[i+2] else ''
-                lat = lon = lat_dms = lon_dms = None
-                try:
-                    coord_pattern = r'(\d{1,3}°\d{1,2}\'[\d.]*"[NS])\s+(\d{1,3}°\d{1,2}\'[\d.]*"[EW])'
-                    match = re.search(coord_pattern, coords_line)
-                    if match:
-                        lat_dms_str, lon_dms_str = match.groups()
-                        lat_resp = requests.post("http://127.0.0.1:8000/parse/dms", json={"dms": lat_dms_str})
-                        lon_resp = requests.post("http://127.0.0.1:8000/parse/dms", json={"dms": lon_dms_str})
-                        if lat_resp.status_code == 200:
-                            lat = lat_resp.json().get('decimal')
-                            lat_dms = lat_dms_str
-                        if lon_resp.status_code == 200:
-                            lon = lon_resp.json().get('decimal')
-                            lon_dms = lon_dms_str
-                except Exception as e:
-                    errors.append({"row": i+2, "error": str(e)})
-                taxon_data = parse_taxon_fullname(taxon_line)
-                date_text = ''
-                if notes_line:
-                    date_match = re.search(r'(\d{1,2}\.\w{1,3}\.?\d{4}|\w+ \d{1,2}, \d{4})', notes_line)
-                    if date_match:
-                        date_text = date_match.group(1)
-                rows.append({
-                    "latitude": lat, "longitude": lon, "latitude_dms": lat_dms, "longitude_dms": lon_dms,
-                    "location_original": "", "date_text": date_text, "collector_name": "",
-                    "genus": taxon_data.get('genus'), "species": taxon_data.get('species'),
-                    "subspecies": taxon_data.get('subspecies'), "display_name": taxon_data.get('display_name'),
-                    "notes": notes_line, "source": "Lazarev M.A. A revision of subspecies structure of Dorcadion scabricolle (2020)"
-                })
-                i += 3 if notes_line else 2
-            else:
-                i += 1
-    
-    return {"rows": rows, "errors": errors, "total": len(rows)}
+# ========== ИССЛЕДОВАНИЯ ==========
 @app.get("/studies")
 def get_studies():
     db = SessionLocal()
     studies = db.query(Study).all()
     db.close()
-    return [{"guid": s.guid, "title": s.title, "url": s.url, "description": s.description, "authors": s.authors, "created_at": s.created_at, "updated_at": s.updated_at} for s in studies]
+    return [{"guid": s.guid, "title": s.title, "url": s.url, "description": s.description, "authors": s.authors} for s in studies]
 
 @app.post("/studies")
-def create_study(study_data: StudyCreate):
+def create_study(study_data: dict):
     db = SessionLocal()
     now = datetime.now().isoformat()
-    if not study_data.title and not study_data.url:
-        raise HTTPException(400, "Необходимо указать title или url")
     study = Study(
-        title=study_data.title, url=study_data.url,
-        description=study_data.description, authors=study_data.authors,
+        title=study_data.get("title"),
+        url=study_data.get("url"),
+        description=study_data.get("description"),
+        authors=study_data.get("authors"),
         created_at=now, updated_at=now
     )
     db.add(study)
     db.commit()
-    study_guid = study.guid
+    guid = study.guid
     db.close()
-    return {"guid": study_guid}
+    return {"guid": guid}
 
 @app.put("/studies/{guid}")
-def update_study(guid: str, study_data: StudyCreate):
+def update_study(guid: str, study_data: dict):
     db = SessionLocal()
     study = db.query(Study).filter(Study.guid == guid).first()
     if not study:
         raise HTTPException(404, "Study not found")
-    if study_data.title is not None:
-        study.title = study_data.title
-    if study_data.url is not None:
-        study.url = study_data.url
-    if study_data.description is not None:
-        study.description = study_data.description
-    if study_data.authors is not None:
-        study.authors = study_data.authors
+    if "title" in study_data:
+        study.title = study_data["title"]
+    if "url" in study_data:
+        study.url = study_data["url"]
+    if "description" in study_data:
+        study.description = study_data["description"]
+    if "authors" in study_data:
+        study.authors = study_data["authors"]
     study.updated_at = datetime.now().isoformat()
     db.commit()
     db.close()
@@ -908,38 +355,271 @@ def delete_study(guid: str):
     db.close()
     return {"message": "Deleted"}
 
-# ========== СВЯЗИ С ИСТОЧНИКАМИ (SOURCE) ==========
+# ========== ТОЧКИ ==========
+@app.get("/points")
+def get_points():
+    db = SessionLocal()
+    points = db.query(Point).all()
+    result = []
+    for p in points:
+        link = db.query(Link).filter(
+            Link.to_guid == p.guid,
+            Link.from_type == "person",
+            Link.relation_type == "collected_at"
+        ).first()
+        collector_name = None
+        if link:
+            person = db.query(Person).filter(Person.guid == link.from_guid).first()
+            if person:
+                collector_name = person.display_name
+        
+        taxon_links = db.query(Link).filter(
+            Link.to_guid == p.guid,
+            Link.relation_type == "has_taxon"
+        ).all()
+        taxon_ids = [tl.from_guid for tl in taxon_links]
+        
+        result.append({
+            "guid": p.guid,
+            "latitude": p.latitude,
+            "longitude": p.longitude,
+            "latitude_dms": p.latitude_dms,
+            "longitude_dms": p.longitude_dms,
+            "location_original": p.location_original,
+            "date_text": p.date_text,
+            "display_date": p.date_text,
+            "collector_name": collector_name,
+            "taxon_ids": taxon_ids
+        })
+    db.close()
+    return result
+
+@app.get("/points/{guid}")
+def get_point(guid: str):
+    db = SessionLocal()
+    point = db.query(Point).filter(Point.guid == guid).first()
+    if not point:
+        raise HTTPException(404, "Point not found")
+    db.close()
+    return {
+        "guid": point.guid,
+        "latitude": point.latitude,
+        "longitude": point.longitude,
+        "location_original": point.location_original,
+        "date_text": point.date_text
+    }
+
+@app.post("/points/create")
+def create_point(point_data: dict):
+    db = SessionLocal()
+    now = datetime.now().isoformat()
+    
+    lat = point_data.get("latitude")
+    lon = point_data.get("longitude")
+    lat_dms = decimal_to_dms_advanced(lat, is_lat=True) if lat is not None else None
+    lon_dms = decimal_to_dms_advanced(lon, is_lat=False) if lon is not None else None
+    
+    collector_name = point_data.get("collector_name", "")
+    person = None
+    if collector_name:
+        person = db.query(Person).filter(Person.display_name == collector_name).first()
+        if not person:
+            person = Person(display_name=collector_name, created_at=now, updated_at=now)
+            db.add(person)
+            db.flush()
+    
+    point = Point(
+        latitude=lat, longitude=lon, latitude_dms=lat_dms, longitude_dms=lon_dms,
+        location_original=point_data.get("location_original"),
+        date_text=point_data.get("date_text"),
+        created_at=now, updated_at=now
+    )
+    db.add(point)
+    db.flush()
+    
+    if person:
+        link = Link(
+            from_guid=person.guid, to_guid=point.guid,
+            from_type="person", to_type="point", relation_type="collected_at",
+            direction="one_to_many", is_directed=1,
+            created_at=now, updated_at=now
+        )
+        db.add(link)
+    
+    db.commit()
+    point_guid = point.guid
+    db.close()
+    return {"guid": point_guid}
+
+@app.put("/points/{guid}")
+def update_point(guid: str, point_data: dict):
+    db = SessionLocal()
+    point = db.query(Point).filter(Point.guid == guid).first()
+    if not point:
+        raise HTTPException(404, "Point not found")
+    
+    point.latitude = point_data.get("latitude", point.latitude)
+    point.longitude = point_data.get("longitude", point.longitude)
+    point.location_original = point_data.get("location_original", point.location_original)
+    point.date_text = point_data.get("date_text", point.date_text)
+    point.updated_at = datetime.now().isoformat()
+    
+    db.commit()
+    db.close()
+    return {"message": "Updated"}
+
+@app.delete("/points/{guid}")
+def delete_point(guid: str):
+    db = SessionLocal()
+    db.query(Link).filter(Link.to_guid == guid).delete()
+    db.query(Point).filter(Point.guid == guid).delete()
+    db.commit()
+    db.close()
+    return {"message": "Deleted"}
+
+# ========== ТАКСОНЫ (обратная совместимость) ==========
+@app.get("/taxa")
+def get_taxa_legacy():
+    db = SessionLocal()
+    species_list = db.query(Species).all()
+    subspecies_list = db.query(Subspecies).all()
+    
+    result = []
+    for s in species_list:
+        result.append({
+            "guid": s.guid,
+            "genus": s.genus,
+            "species": s.species_name,
+            "subspecies": None,
+            "display_name": s.display_name
+        })
+    
+    for ss in subspecies_list:
+        species = db.query(Species).filter(Species.guid == ss.species_guid).first()
+        result.append({
+            "guid": ss.guid,
+            "genus": species.genus if species else "",
+            "species": species.species_name if species else "",
+            "subspecies": ss.subspecies_name,
+            "display_name": ss.display_name
+        })
+    
+    db.close()
+    return result
+
+@app.get("/taxa/search")
+def search_taxa(q: str = ""):
+    db = SessionLocal()
+    results = []
+    species = db.query(Species).filter(
+        (Species.genus.contains(q)) | (Species.species_name.contains(q))
+    ).limit(20).all()
+    for s in species:
+        results.append({"guid": s.guid, "genus": s.genus, "species": s.species_name, "display_name": s.display_name})
+    db.close()
+    return results
+
+@app.post("/taxa")
+def create_taxon_legacy(genus: str, species: str, display_name: Optional[str] = None):
+    return create_species(genus, species, display_name)
+
+# ========== СВЯЗИ ТОЧКА-ТАКСОН ==========
+@app.get("/point_taxa/{point_guid}")
+def get_point_taxa(point_guid: str):
+    db = SessionLocal()
+    links = db.query(Link).filter(
+        Link.to_guid == point_guid,
+        Link.relation_type == "has_taxon"
+    ).all()
+    result = []
+    for link in links:
+        if link.from_type == "species":
+            taxon = db.query(Species).filter(Species.guid == link.from_guid).first()
+            if taxon:
+                result.append({
+                    "guid": taxon.guid,
+                    "genus": taxon.genus,
+                    "species": taxon.species_name,
+                    "display_name": taxon.display_name
+                })
+        elif link.from_type == "subspecies":
+            taxon = db.query(Subspecies).filter(Subspecies.guid == link.from_guid).first()
+            if taxon:
+                species = db.query(Species).filter(Species.guid == taxon.species_guid).first()
+                result.append({
+                    "guid": taxon.guid,
+                    "genus": species.genus if species else "",
+                    "species": species.species_name if species else "",
+                    "subspecies": taxon.subspecies_name,
+                    "display_name": taxon.display_name
+                })
+    db.close()
+    return result
+
+@app.post("/point_taxa/{point_guid}/{taxon_guid}")
+def add_taxon_to_point(point_guid: str, taxon_guid: str):
+    db = SessionLocal()
+    now = datetime.now().isoformat()
+    
+    taxon_type = None
+    if db.query(Species).filter(Species.guid == taxon_guid).first():
+        taxon_type = "species"
+    elif db.query(Subspecies).filter(Subspecies.guid == taxon_guid).first():
+        taxon_type = "subspecies"
+    else:
+        raise HTTPException(404, "Taxon not found")
+    
+    existing = db.query(Link).filter(
+        Link.from_guid == taxon_guid,
+        Link.to_guid == point_guid,
+        Link.relation_type == "has_taxon"
+    ).first()
+    
+    if existing:
+        db.close()
+        return {"message": "Already linked"}
+    
+    link = Link(
+        from_guid=taxon_guid, to_guid=point_guid,
+        from_type=taxon_type, to_type="point", relation_type="has_taxon",
+        direction="many_to_many", is_directed=1,
+        created_at=now, updated_at=now
+    )
+    db.add(link)
+    db.commit()
+    db.close()
+    return {"message": "Linked"}
+
+@app.delete("/point_taxa/{point_guid}/{taxon_guid}")
+def remove_taxon_from_point(point_guid: str, taxon_guid: str):
+    db = SessionLocal()
+    link = db.query(Link).filter(
+        Link.from_guid == taxon_guid,
+        Link.to_guid == point_guid,
+        Link.relation_type == "has_taxon"
+    ).first()
+    if link:
+        db.delete(link)
+        db.commit()
+    db.close()
+    return {"message": "Unlinked"}
+
+# ========== СВЯЗИ С ИСТОЧНИКАМИ ==========
 @app.post("/source/{from_type}/{from_guid}/{study_guid}")
 def add_source(from_type: str, from_guid: str, study_guid: str):
     db = SessionLocal()
     now = datetime.now().isoformat()
-    if from_type == "person":
-        obj = db.query(Person).filter(Person.guid == from_guid).first()
-    elif from_type == "point":
-        obj = db.query(Point).filter(Point.guid == from_guid).first()
-    elif from_type == "taxon":
-        obj = db.query(Taxon).filter(Taxon.guid == from_guid).first()
-    else:
-        db.close()
-        raise HTTPException(400, "Invalid from_type")
-    if not obj:
-        db.close()
-        raise HTTPException(404, f"{from_type} not found")
-    study = db.query(Study).filter(Study.guid == study_guid).first()
-    if not study:
-        db.close()
-        raise HTTPException(404, "Study not found")
+    
     existing = db.query(Link).filter(
         Link.from_guid == from_guid, Link.to_guid == study_guid,
-        Link.from_type == from_type, Link.to_type == "study",
         Link.relation_type == "source"
     ).first()
+    
     if existing:
-        link_guid = existing.link_guid
         db.close()
-        return {"message": "Source already linked", "link_guid": link_guid}
+        return {"message": "Already linked", "link_guid": existing.link_guid}
+    
     link = Link(
-        link_guid=generate_uuid(),
         from_guid=from_guid, to_guid=study_guid,
         from_type=from_type, to_type="study", relation_type="source",
         direction="many_to_many", is_directed=1,
@@ -949,7 +629,7 @@ def add_source(from_type: str, from_guid: str, study_guid: str):
     db.commit()
     link_guid = link.link_guid
     db.close()
-    return {"link_guid": link_guid, "message": "Source linked"}
+    return {"link_guid": link_guid, "message": "Linked"}
 
 @app.delete("/source/{link_guid}")
 def remove_source(link_guid: str):
@@ -960,7 +640,7 @@ def remove_source(link_guid: str):
     db.delete(link)
     db.commit()
     db.close()
-    return {"message": "Source removed"}
+    return {"message": "Removed"}
 
 @app.get("/sources/{from_type}/{from_guid}")
 def get_sources(from_type: str, from_guid: str):
@@ -985,889 +665,262 @@ def get_sources(from_type: str, from_guid: str):
     db.close()
     return sources
 
-# ========== ЭКСПОРТ В CSV ==========
-from fastapi.responses import StreamingResponse
-import io
-import csv
-from datetime import datetime
+# ========== ИМПОРТ ==========
+@app.post("/import/parse-file")
+async def parse_import_file(file: UploadFile = File(...)):
+    content = await file.read()
+    text = content.decode('utf-8')
+    filename = file.filename.lower()
+    rows = []
+    
+    if filename.endswith('.csv'):
+        csv_reader = csv.DictReader(io.StringIO(text))
+        for row in csv_reader:
+            rows.append({
+                "latitude": row.get("latitude", ""),
+                "longitude": row.get("longitude", ""),
+                "location_original": row.get("location_original", ""),
+                "date_text": row.get("date_text", ""),
+                "collector_name": row.get("collector_name", ""),
+                "genus": row.get("genus", ""),
+                "species": row.get("species", ""),
+                "subspecies": row.get("subspecies", ""),
+                "display_name": row.get("display_name", ""),
+                "notes": row.get("notes", ""),
+                "source": row.get("source", "")
+            })
+    
+    return {"rows": rows, "total": len(rows), "errors": []}
 
-@app.get("/export/points")
-async def export_points(year: Optional[str] = None, month: Optional[str] = None, day: Optional[str] = None, collector: Optional[str] = None):
-    db = SessionLocal()
-    query = db.query(Point)
-    if year:
-        query = query.filter(Point.date_text.contains(year))
-    if month:
-        query = query.filter(Point.date_text.contains(f".{month}."))
-    if day:
-        query = query.filter(Point.date_text.startswith(day.zfill(2)))
-    points = query.all()
-    export_data = []
-    for p in points:
-        link = db.query(Link).filter(Link.to_guid == p.guid, Link.from_type == "person", Link.relation_type == "collected_at").first()
-        collector_name = None
-        if link:
-            person = db.query(Person).filter(Person.guid == link.from_guid).first()
-            if person:
-                collector_name = person.display_name
-        taxon_links = db.query(Link).filter(Link.to_guid == p.guid, Link.from_type == "taxon", Link.relation_type == "has_taxon").all()
-        taxa_names = []
-        for tl in taxon_links:
-            taxon = db.query(Taxon).filter(Taxon.guid == tl.from_guid).first()
-            if taxon:
-                taxa_names.append(taxon.display_name or f"{taxon.genus} {taxon.species or ''}")
-        source_links = db.query(Link).filter(Link.from_guid == p.guid, Link.from_type == "point", Link.relation_type == "source").all()
-        sources = []
-        for sl in source_links:
-            study = db.query(Study).filter(Study.guid == sl.to_guid).first()
-            if study:
-                sources.append(study.title or study.url)
-        export_data.append({
-            "latitude": p.latitude, "longitude": p.longitude, "latitude_dms": p.latitude_dms, "longitude_dms": p.longitude_dms,
-            "location_original": p.location_original, "date_text": p.date_text, "collector": collector_name,
-            "taxa": "; ".join(taxa_names), "sources": "; ".join(sources)
+@app.post("/import/validate")
+async def validate_import(data: dict):
+    rows = data.get("rows", [])
+    results = []
+    for idx, row in enumerate(rows):
+        results.append({
+            "row": idx + 2,
+            "valid": True,
+            "errors": [],
+            "warnings": []
         })
+    return {"results": results}
+
+@app.post("/import/confirm")
+async def confirm_import(data: dict):
+    rows = data.get("rows", [])
+    db = SessionLocal()
+    now = datetime.now().isoformat()
+    imported_count = 0
+    
+    for row in rows:
+        genus = row.get("genus", "").strip().capitalize()
+        species_name = row.get("species", "").strip().lower()
+        subspecies_name = row.get("subspecies", "").strip().lower()
+        
+        # Находим или создаем вид
+        species = None
+        if genus and species_name:
+            species = db.query(Species).filter(
+                Species.genus == genus,
+                Species.species_name == species_name
+            ).first()
+            
+            if not species:
+                species = Species(
+                    genus=genus, species_name=species_name,
+                    display_name=f"{genus} {species_name}",
+                    created_at=now, updated_at=now
+                )
+                db.add(species)
+                db.flush()
+        
+        # Находим или создаем подвид
+        subspecies = None
+        if subspecies_name and species:
+            subspecies = db.query(Subspecies).filter(
+                Subspecies.species_guid == species.guid,
+                Subspecies.subspecies_name == subspecies_name
+            ).first()
+            
+            if not subspecies:
+                subspecies = Subspecies(
+                    species_guid=species.guid,
+                    subspecies_name=subspecies_name,
+                    display_name=f"{genus} {species_name} {subspecies_name}",
+                    created_at=now, updated_at=now
+                )
+                db.add(subspecies)
+                db.flush()
+        
+        # Находим или создаем сборщика
+        collector_name = row.get("collector_name", "").strip()
+        person = None
+        if collector_name:
+            person = db.query(Person).filter(Person.display_name == collector_name).first()
+            if not person:
+                person = Person(display_name=collector_name, created_at=now, updated_at=now)
+                db.add(person)
+                db.flush()
+        
+        # Парсим координаты
+        lat_str = row.get("latitude", "")
+        lon_str = row.get("longitude", "")
+        lat = None
+        lon = None
+        
+        if lat_str:
+            if "°" in lat_str:
+                lat = parse_coordinate_dms(lat_str)
+            else:
+                try:
+                    lat = float(lat_str)
+                except:
+                    pass
+        
+        if lon_str:
+            if "°" in lon_str:
+                lon = parse_coordinate_dms(lon_str)
+            else:
+                try:
+                    lon = float(lon_str)
+                except:
+                    pass
+        
+        lat_dms = decimal_to_dms_advanced(lat, is_lat=True) if lat is not None else None
+        lon_dms = decimal_to_dms_advanced(lon, is_lat=False) if lon is not None else None
+        
+        # Создаем точку
+        point = Point(
+            latitude=lat, longitude=lon,
+            latitude_dms=lat_dms, longitude_dms=lon_dms,
+            location_original=row.get("location_original", ""),
+            date_text=row.get("date_text", ""),
+            created_at=now, updated_at=now
+        )
+        db.add(point)
+        db.flush()
+        
+        # Связь со сборщиком
+        if person:
+            db.add(Link(
+                from_guid=person.guid, to_guid=point.guid,
+                from_type="person", to_type="point", relation_type="collected_at",
+                direction="one_to_many", is_directed=1,
+                created_at=now, updated_at=now
+            ))
+        
+        # Связь с таксоном
+        taxon_guid = subspecies.guid if subspecies else (species.guid if species else None)
+        taxon_type = "subspecies" if subspecies else ("species" if species else None)
+        
+        if taxon_guid and taxon_type:
+            db.add(Link(
+                from_guid=taxon_guid, to_guid=point.guid,
+                from_type=taxon_type, to_type="point", relation_type="has_taxon",
+                direction="many_to_many", is_directed=1,
+                created_at=now, updated_at=now
+            ))
+        
+        imported_count += 1
+    
+    db.commit()
     db.close()
+    return {"message": f"Импортировано {imported_count} записей"}
+
+# ========== ЭКСПОРТ ==========
+@app.get("/export/points")
+async def export_points():
+    db = SessionLocal()
+    points = db.query(Point).all()
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["latitude", "longitude", "latitude_dms", "longitude_dms", "location_original", "date_text", "collector", "taxa", "sources"])
-    writer.writeheader()
-    writer.writerows(export_data)
-    filename = f"entomo_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+    writer = csv.writer(output)
+    writer.writerow(["latitude", "longitude", "location_original", "date_text"])
+    for p in points:
+        writer.writerow([p.latitude, p.longitude, p.location_original, p.date_text])
+    db.close()
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=export.csv"})
 
 @app.get("/export/taxa")
 async def export_taxa():
     db = SessionLocal()
-    taxa = db.query(Taxon).all()
-    export_data = [{"genus": t.genus, "species": t.species, "subspecies": t.subspecies, "display_name": t.display_name, "created_at": t.created_at} for t in taxa]
-    db.close()
+    species = db.query(Species).all()
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["genus", "species", "subspecies", "display_name", "created_at"])
-    writer.writeheader()
-    writer.writerows(export_data)
-    filename = f"entomo_taxa_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+    writer = csv.writer(output)
+    writer.writerow(["genus", "species"])
+    for s in species:
+        writer.writerow([s.genus, s.species_name])
+    db.close()
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=taxa.csv"})
 
 @app.get("/export/studies")
 async def export_studies():
     db = SessionLocal()
     studies = db.query(Study).all()
-    export_data = [{"title": s.title, "url": s.url, "description": s.description, "authors": s.authors, "created_at": s.created_at} for s in studies]
-    db.close()
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["title", "url", "description", "authors", "created_at"])
-    writer.writeheader()
-    writer.writerows(export_data)
-    filename = f"entomo_studies_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
+    writer = csv.writer(output)
+    writer.writerow(["title", "url", "description", "authors"])
+    for s in studies:
+        writer.writerow([s.title, s.url, s.description, s.authors])
+    db.close()
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=studies.csv"})
 
-# ========== МАССОВОЕ РЕДАКТИРОВАНИЕ ==========
-class BulkEditRequest(BaseModel):
-    point_guids: List[str]
-    updates: dict
-
-@app.post("/points/bulk-update")
-def bulk_update_points(request: BulkEditRequest):
-    """
-    Массовое обновление точек.
-    """
+# ========== ГРАФ ==========
+@app.get("/objects/{obj_type}/{guid}/links")
+def get_object_links(obj_type: str, guid: str):
     db = SessionLocal()
-    now = datetime.now().isoformat()
-    updated_count = 0
-    errors = []
-    
-    try:
-        points = db.query(Point).filter(Point.guid.in_(request.point_guids)).all()
-        
-        # Обработка замены сборщика с удалением старого
-        replaced_person = None
-        if "replace_person" in request.updates:
-            replace_data = request.updates["replace_person"]
-            old_person_guid = replace_data.get("old_person_guid")
-            new_person_guid = replace_data.get("new_person_guid")
-            
-            if old_person_guid and new_person_guid:
-                old_person = db.query(Person).filter(Person.guid == old_person_guid).first()
-                new_person = db.query(Person).filter(Person.guid == new_person_guid).first()
-                
-                if not old_person:
-                    errors.append(f"Старый сборщик с GUID {old_person_guid} не найден")
-                elif not new_person:
-                    errors.append(f"Новый сборщик с GUID {new_person_guid} не найден")
-                else:
-                    for point in points:
-                        db.query(Link).filter(
-                            Link.from_guid == old_person_guid,
-                            Link.to_guid == point.guid,
-                            Link.from_type == "person",
-                            Link.relation_type == "collected_at"
-                        ).delete()
-                        
-                        link = Link(
-                            from_guid=new_person_guid,
-                            to_guid=point.guid,
-                            from_type="person",
-                            to_type="point",
-                            relation_type="collected_at",
-                            direction="one_to_many",
-                            is_directed=1,
-                            created_at=now,
-                            updated_at=now
-                        )
-                        db.add(link)
-                        point.updated_at = now
-                    
-                    other_links = db.query(Link).filter(
-                        Link.from_guid == old_person_guid,
-                        Link.from_type == "person",
-                        Link.relation_type == "collected_at"
-                    ).all()
-                    for link in other_links:
-                        db.delete(link)
-                    
-                    db.delete(old_person)
-                    replaced_person = old_person.display_name
-                    updated_count = len(points)
-        
-        # Обычная замена сборщика (без удаления)
-        new_person = None
-        if "collector_name" in request.updates and request.updates["collector_name"] and not replaced_person:
-            collector_name = request.updates["collector_name"]
-            new_person = db.query(Person).filter(Person.display_name == collector_name).first()
-            if not new_person:
-                new_person = Person(display_name=collector_name, created_at=now, updated_at=now)
-                db.add(new_person)
-                db.flush()
-        
-        study = None
-        if "study_guid" in request.updates and request.updates["study_guid"]:
-            study_guid = request.updates["study_guid"]
-            study = db.query(Study).filter(Study.guid == study_guid).first()
-            if not study:
-                errors.append(f"Исследование с GUID {study_guid} не найдено")
-        
-        new_taxa = []
-        if "taxa_guids" in request.updates and request.updates["taxa_guids"]:
-            taxa_guids = request.updates["taxa_guids"]
-            new_taxa = db.query(Taxon).filter(Taxon.guid.in_(taxa_guids)).all()
-            if len(new_taxa) != len(taxa_guids):
-                errors.append("Некоторые таксоны не найдены")
-        
-        for point in points:
-            if not replaced_person and new_person:
-                db.query(Link).filter(
-                    Link.to_guid == point.guid,
-                    Link.from_type == "person",
-                    Link.relation_type == "collected_at"
-                ).delete()
-                link = Link(
-                    from_guid=new_person.guid, to_guid=point.guid,
-                    from_type="person", to_type="point", relation_type="collected_at",
-                    direction="one_to_many", is_directed=1,
-                    created_at=now, updated_at=now
-                )
-                db.add(link)
-                point.updated_at = now
-            
-            if study:
-                existing_link = db.query(Link).filter(
-                    Link.from_guid == point.guid,
-                    Link.to_guid == study.guid,
-                    Link.from_type == "point",
-                    Link.to_type == "study",
-                    Link.relation_type == "source"
-                ).first()
-                if not existing_link:
-                    link = Link(
-                        from_guid=point.guid, to_guid=study.guid,
-                        from_type="point", to_type="study", relation_type="source",
-                        direction="many_to_many", is_directed=1,
-                        created_at=now, updated_at=now
-                    )
-                    db.add(link)
-                point.updated_at = now
-            
-            if new_taxa:
-                db.query(Link).filter(
-                    Link.to_guid == point.guid,
-                    Link.from_type == "taxon",
-                    Link.relation_type == "has_taxon"
-                ).delete()
-                for taxon in new_taxa:
-                    link = Link(
-                        from_guid=taxon.guid, to_guid=point.guid,
-                        from_type="taxon", to_type="point", relation_type="has_taxon",
-                        direction="many_to_many", is_directed=1,
-                        created_at=now, updated_at=now
-                    )
-                    db.add(link)
-                point.updated_at = now
-            
-            if not replaced_person:
-                updated_count += 1
-        
-        db.commit()
-        
-        message = f"Обновлено точек: {updated_count}"
-        if replaced_person:
-            message = f"Сборщик '{replaced_person}' заменен и удален. Обновлено точек: {updated_count}"
-        
-        return {
-            "message": message,
-            "updated_count": updated_count,
-            "errors": errors
-        }
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(500, f"Ошибка при массовом обновлении: {str(e)}")
-    finally:
-        db.close()
-
-@app.post("/points/bulk-info")
-def get_bulk_info(point_guids: List[str]):
-    """
-    Получает информацию о выбранных точках.
-    """
-    db = SessionLocal()
-    try:
-        points = db.query(Point).filter(Point.guid.in_(point_guids)).all()
-        
-        collectors = set()
-        study_guids = set()
-        taxa_guids = set()
-        
-        for point in points:
-            collector_link = db.query(Link).filter(
-                Link.to_guid == point.guid,
-                Link.from_type == "person",
-                Link.relation_type == "collected_at"
-            ).first()
-            if collector_link:
-                person = db.query(Person).filter(Person.guid == collector_link.from_guid).first()
-                if person:
-                    collectors.add(person.display_name)
-            
-            source_links = db.query(Link).filter(
-                Link.from_guid == point.guid,
-                Link.from_type == "point",
-                Link.relation_type == "source"
-            ).all()
-            for link in source_links:
-                study_guids.add(link.to_guid)
-            
-            taxon_links = db.query(Link).filter(
-                Link.to_guid == point.guid,
-                Link.from_type == "taxon",
-                Link.relation_type == "has_taxon"
-            ).all()
-            for link in taxon_links:
-                taxa_guids.add(link.from_guid)
-        
-        return {
-            "points_count": len(points),
-            "unique_collectors": list(collectors),
-            "unique_studies": list(study_guids),
-            "unique_taxa": list(taxa_guids)
-        }
-    finally:
-        db.close()
-
-def get_bulk_info(point_guids: List[str]):
-    """
-    Получает информацию о выбранных точках.
-    """
-    db = SessionLocal()
-    try:
-        points = db.query(Point).filter(Point.guid.in_(point_guids)).all()
-        
-        collectors = set()
-        study_guids = set()
-        taxa_guids = set()
-        
-        for point in points:
-            collector_link = db.query(Link).filter(
-                Link.to_guid == point.guid,
-                Link.from_type == "person",
-                Link.relation_type == "collected_at"
-            ).first()
-            if collector_link:
-                person = db.query(Person).filter(Person.guid == collector_link.from_guid).first()
-                if person:
-                    collectors.add(person.display_name)
-            
-            source_links = db.query(Link).filter(
-                Link.from_guid == point.guid,
-                Link.from_type == "point",
-                Link.relation_type == "source"
-            ).all()
-            for link in source_links:
-                study_guids.add(link.to_guid)
-            
-            taxon_links = db.query(Link).filter(
-                Link.to_guid == point.guid,
-                Link.from_type == "taxon",
-                Link.relation_type == "has_taxon"
-            ).all()
-            for link in taxon_links:
-                taxa_guids.add(link.from_guid)
-        
-        return {
-            "points_count": len(points),
-            "unique_collectors": list(collectors),
-            "unique_studies": list(study_guids),
-            "unique_taxa": list(taxa_guids)
-        }
-    finally:
-        db.close()
-
-# ========== ИМПОРТ ВАЛИДАЦИЯ ==========
-@app.post("/import/validate")
-async def validate_import_data(data: dict):
-    db = SessionLocal()
-    rows = data.get("rows", [])
-    validation_results = []
-    
-    if not rows or len(rows) == 0:
-        return {"results": [], "error": "Нет данных для валидации"}
-    
-    for idx, row in enumerate(rows):
-        row_num = idx + 2
-        errors = []
-        
-        # Проверяем обязательные поля
-        if not row.get("genus"):
-            errors.append("Не указан род таксона")
-        
-        # Проверяем координаты если они указаны
-        lat_val = row.get("latitude")
-        lon_val = row.get("longitude")
-        
-        if lat_val:
-            if isinstance(lat_val, str) and "°" in lat_val:
-                lat_float = parse_coordinate_dms(lat_val)
-                if lat_float is None:
-                    errors.append(f"Не удалось распознать широту: {lat_val}")
-        
-        if lon_val:
-            if isinstance(lon_val, str) and "°" in lon_val:
-                lon_float = parse_coordinate_dms(lon_val)
-                if lon_float is None:
-                    errors.append(f"Не удалось распознать долготу: {lon_val}")
-        
-        validation_results.append({
-            "row": row_num,
-            "valid": len(errors) == 0,
-            "errors": errors
+    outgoing = db.query(Link).filter(
+        Link.from_guid == guid,
+        Link.from_type == obj_type
+    ).all()
+    incoming = db.query(Link).filter(
+        Link.to_guid == guid,
+        Link.to_type == obj_type
+    ).all()
+    result = []
+    for link in outgoing:
+        result.append({
+            "link_guid": link.link_guid,
+            "relation_type": link.relation_type,
+            "target_type": link.to_type,
+            "target_guid": link.to_guid,
+            "direction": "outgoing"
         })
-    
+    for link in incoming:
+        result.append({
+            "link_guid": link.link_guid,
+            "relation_type": link.relation_type,
+            "target_type": link.from_type,
+            "target_guid": link.from_guid,
+            "direction": "incoming"
+        })
     db.close()
-    return {"results": validation_results}
+    return result
 
-
-# ========== ИМПОРТ ПОДТВЕРЖДЕНИЕ ==========
-@app.post("/import/confirm")
-async def confirm_import(data: dict):
+@app.get("/search")
+def search_objects(q: str = "", obj_type: Optional[str] = None, limit: int = 20):
     db = SessionLocal()
-    rows = data.get("rows", [])
-    now = datetime.now().isoformat()
-    imported_points = []
-    linked_points = []
-    new_taxa = []
-    new_persons = []
-    new_studies = []
-    new_links = 0
-    errors = []
+    results = []
     
-    for idx, row in enumerate(rows):
-        try:
-            # 1. Обработка таксона - НОРМАЛИЗОВАННЫЙ поиск
-            taxon = None
-            if row.get("genus"):
-                genus_norm = row["genus"].strip().capitalize()
-                species_raw = row.get("species")
-                species_norm = species_raw.strip().lower() if species_raw else None
-                subspecies_norm = row.get("subspecies").strip().lower() if row.get("subspecies") else None
-                
-                # Поиск по genus + species (регистронезависимый)
-                taxon = db.query(Taxon).filter(
-                    func.lower(Taxon.genus) == func.lower(genus_norm),
-                    Taxon.species == species_norm
-                ).first()
-                
-                if not taxon:
-                    # Создаем новый таксон
-                    display_name = row.get("display_name") or f"{genus_norm} {species_norm or ''} {subspecies_norm or ''}".strip()
-                    taxon = Taxon(
-                        genus=genus_norm,
-                        species=species_norm,
-                        subspecies=subspecies_norm,
-                        display_name=display_name,
-                        created_at=now,
-                        updated_at=now
-                    )
-                    db.add(taxon)
-                    db.flush()
-                    new_taxa.append({"guid": taxon.guid, "name": taxon.display_name})
-            
-            # 2. Обработка сборщика
-            person = None
-            if row.get("collector_name"):
-                person = db.query(Person).filter(
-                    Person.display_name.ilike(row["collector_name"])
-                ).first()
-                
-                if not person:
-                    person = Person(
-                        display_name=row["collector_name"],
-                        created_at=now,
-                        updated_at=now
-                    )
-                    db.add(person)
-                    db.flush()
-                    new_persons.append({"guid": person.guid, "name": person.display_name})
-            
-            # 3. Обработка источника
-            study = None
-            source_title = row.get("source") or row.get("study_title")
-            if source_title:
-                study = db.query(Study).filter(
-                    (Study.title == source_title) | (Study.url == source_title)
-                ).first()
-                
-                if not study:
-                    study = Study(
-                        title=source_title,
-                        description=f"Импортировано из источника: {source_title}",
-                        url=row.get("source_url", ""),
-                        created_at=now,
-                        updated_at=now
-                    )
-                    db.add(study)
-                    db.flush()
-                    new_studies.append({"guid": study.guid, "title": study.title})
-            
-            # 4. Парсим координаты
-            lat_raw = row.get("latitude")
-            lon_raw = row.get("longitude")
-            lat_dms = row.get("latitude_dms")
-            lon_dms = row.get("longitude_dms")
-            
-            lat = None
-            lon = None
-            
-            if lat_raw:
-                if isinstance(lat_raw, str) and "°" in lat_raw:
-                    lat = parse_coordinate_dms(lat_raw)
-                else:
-                    try:
-                        lat = float(lat_raw)
-                    except:
-                        pass
-            
-            if lon_raw:
-                if isinstance(lon_raw, str) and "°" in lon_raw:
-                    lon = parse_coordinate_dms(lon_raw)
-                else:
-                    try:
-                        lon = float(lon_raw)
-                    except:
-                        pass
-            
-            # 5. Ищем существующую точку
-            point = None
-            if row.get("location_original"):
-                point = db.query(Point).filter(
-                    Point.location_original == row.get("location_original")
-                ).first()
-            
-            if not point and lat and lon:
-                point = db.query(Point).filter(
-                    Point.latitude == lat,
-                    Point.longitude == lon
-                ).first()
-            
-            # Создаем новую точку если не нашли
-            if not point:
-                point = Point(
-                    latitude=lat,
-                    longitude=lon,
-                    latitude_dms=lat_dms,
-                    longitude_dms=lon_dms,
-                    location_original=row.get("location_original", ""),
-                    date_text=row.get("date_text", ""),
-                    created_at=now,
-                    updated_at=now
-                )
-                db.add(point)
-                db.flush()
-                imported_points.append({"guid": point.guid, "location": point.location_original})
-            else:
-                linked_points.append({"guid": point.guid, "location": point.location_original})
-            
-            # 6. Создаем связи
-            if person:
-                existing_link = db.query(Link).filter(
-                    Link.from_guid == person.guid,
-                    Link.to_guid == point.guid,
-                    Link.relation_type == "collected_at"
-                ).first()
-                if not existing_link:
-                    db.add(Link(
-                        from_guid=person.guid,
-                        to_guid=point.guid,
-                        from_type="person",
-                        to_type="point",
-                        relation_type="collected_at",
-                        direction="one_to_many",
-                        is_directed=1,
-                        created_at=now,
-                        updated_at=now
-                    ))
-                    new_links += 1
-            
-            if taxon:
-                existing_link = db.query(Link).filter(
-                    Link.from_guid == taxon.guid,
-                    Link.to_guid == point.guid,
-                    Link.relation_type == "has_taxon"
-                ).first()
-                if not existing_link:
-                    db.add(Link(
-                        from_guid=taxon.guid,
-                        to_guid=point.guid,
-                        from_type="taxon",
-                        to_type="point",
-                        relation_type="has_taxon",
-                        direction="many_to_many",
-                        is_directed=1,
-                        created_at=now,
-                        updated_at=now
-                    ))
-                    new_links += 1
-            
-            if study:
-                existing_link = db.query(Link).filter(
-                    Link.from_guid == point.guid,
-                    Link.to_guid == study.guid,
-                    Link.relation_type == "source"
-                ).first()
-                if not existing_link:
-                    db.add(Link(
-                        from_guid=point.guid,
-                        to_guid=study.guid,
-                        from_type="point",
-                        to_type="study",
-                        relation_type="source",
-                        direction="many_to_many",
-                        is_directed=1,
-                        created_at=now,
-                        updated_at=now
-                    ))
-                    new_links += 1
-                
-                if taxon:
-                    existing_link = db.query(Link).filter(
-                        Link.from_guid == taxon.guid,
-                        Link.to_guid == study.guid,
-                        Link.relation_type == "source"
-                    ).first()
-                    if not existing_link:
-                        db.add(Link(
-                            from_guid=taxon.guid,
-                            to_guid=study.guid,
-                            from_type="taxon",
-                            to_type="study",
-                            relation_type="source",
-                            direction="many_to_many",
-                            is_directed=1,
-                            created_at=now,
-                            updated_at=now
-                        ))
-                        new_links += 1
-            
-            point.updated_at = now
-            
-        except Exception as e:
-            errors.append({"row": idx + 2, "error": str(e)})
+    if not obj_type or obj_type == "species":
+        species = db.query(Species).filter(
+            (Species.genus.contains(q)) | (Species.species_name.contains(q))
+        ).limit(limit).all()
+        for s in species:
+            results.append({"type": "species", "guid": s.guid, "name": s.display_name})
     
-    db.commit()
+    if not obj_type or obj_type == "person":
+        persons = db.query(Person).filter(Person.display_name.contains(q)).limit(limit).all()
+        for p in persons:
+            results.append({"type": "person", "guid": p.guid, "name": p.display_name})
+    
+    if not obj_type or obj_type == "point":
+        points = db.query(Point).filter(Point.location_original.contains(q)).limit(limit).all()
+        for p in points:
+            results.append({"type": "point", "guid": p.guid, "name": p.location_original or "Точка"})
+    
     db.close()
-    
-    message_parts = []
-    if len(imported_points) > 0:
-        message_parts.append(f"создано {len(imported_points)} новых точек")
-    if len(linked_points) > 0:
-        message_parts.append(f"обновлено {len(linked_points)} существующих точек")
-    if len(new_taxa) > 0:
-        message_parts.append(f"создано {len(new_taxa)} таксонов")
-    if len(new_persons) > 0:
-        message_parts.append(f"создано {len(new_persons)} сборщиков")
-    if len(new_studies) > 0:
-        message_parts.append(f"создано {len(new_studies)} исследований")
-    if new_links > 0:
-        message_parts.append(f"добавлено {new_links} новых связей")
-    
-    message = f"Импорт завершен. {', '.join(message_parts)}."
-    
-    return {
-        "message": message,
-        "points_created": len(imported_points),
-        "points_updated": len(linked_points),
-        "taxa_created": len(new_taxa),
-        "persons_created": len(new_persons),
-        "studies_created": len(new_studies),
-        "links_added": new_links,
-        "errors": errors
-    }
-
-    db = SessionLocal()
-    rows = data.get("rows", [])
-    now = datetime.now().isoformat()
-    imported_points = []
-    linked_points = []
-    new_taxa = []
-    new_persons = []
-    new_studies = []
-    new_links = 0
-    errors = []
-    
-    for idx, row in enumerate(rows):
-        try:
-            # 1. Обработка таксона - ищем или создаем
-            taxon = None
-            if row.get("genus"):
-                taxon = db.query(Taxon).filter(
-                    Taxon.genus == row["genus"],
-                    Taxon.species == (row.get("species") if row.get("species") else None),
-                    Taxon.subspecies == (row.get("subspecies") if row.get("subspecies") else None)
-                ).first()
-                
-                if not taxon:
-                    display_name = row.get("display_name") or f"{row['genus']} {row.get('species', '')} {row.get('subspecies', '')}".strip()
-                    taxon = Taxon(
-                        genus=row["genus"],
-                        species=row.get("species"),
-                        subspecies=row.get("subspecies"),
-                        display_name=display_name,
-                        created_at=now,
-                        updated_at=now
-                    )
-                    db.add(taxon)
-                    db.flush()
-                    new_taxa.append({"guid": taxon.guid, "name": taxon.display_name})
-            
-            # 2. Обработка сборщика - ищем или создаем
-            person = None
-            if row.get("collector_name"):
-                person = db.query(Person).filter(
-                    Person.display_name.ilike(row["collector_name"])
-                ).first()
-                
-                if not person:
-                    person = Person(
-                        display_name=row["collector_name"],
-                        created_at=now,
-                        updated_at=now
-                    )
-                    db.add(person)
-                    db.flush()
-                    new_persons.append({"guid": person.guid, "name": person.display_name})
-            
-            # 3. Обработка источника - ищем или создаем
-            study = None
-            source_title = row.get("source") or row.get("study_title")
-            if source_title:
-                study = db.query(Study).filter(
-                    (Study.title == source_title) | (Study.url == source_title)
-                ).first()
-                
-                if not study:
-                    study = Study(
-                        title=source_title,
-                        description=f"Импортировано из источника: {source_title}",
-                        url=row.get("source_url", ""),
-                        created_at=now,
-                        updated_at=now
-                    )
-                    db.add(study)
-                    db.flush()
-                    new_studies.append({"guid": study.guid, "title": study.title})
-            
-            # 4. Парсим координаты
-            lat_raw = row.get("latitude")
-            lon_raw = row.get("longitude")
-            lat_dms = row.get("latitude_dms")
-            lon_dms = row.get("longitude_dms")
-            
-            lat = None
-            lon = None
-            
-            if lat_raw:
-                if isinstance(lat_raw, str) and "°" in lat_raw:
-                    lat = parse_coordinate_dms(lat_raw)
-                else:
-                    try:
-                        lat = float(lat_raw)
-                    except:
-                        pass
-            
-            if lon_raw:
-                if isinstance(lon_raw, str) and "°" in lon_raw:
-                    lon = parse_coordinate_dms(lon_raw)
-                else:
-                    try:
-                        lon = float(lon_raw)
-                    except:
-                        pass
-            
-            # 5. Ищем существующую точку
-            point = None
-            if row.get("location_original"):
-                point = db.query(Point).filter(
-                    Point.location_original == row.get("location_original")
-                ).first()
-            
-            if not point and lat and lon:
-                point = db.query(Point).filter(
-                    Point.latitude == lat,
-                    Point.longitude == lon
-                ).first()
-            
-            # Создаем новую точку если не нашли
-            if not point:
-                point = Point(
-                    latitude=lat,
-                    longitude=lon,
-                    latitude_dms=lat_dms,
-                    longitude_dms=lon_dms,
-                    location_original=row.get("location_original", ""),
-                    date_text=row.get("date_text", ""),
-                    created_at=now,
-                    updated_at=now
-                )
-                db.add(point)
-                db.flush()
-                imported_points.append({"guid": point.guid, "location": point.location_original})
-            else:
-                linked_points.append({"guid": point.guid, "location": point.location_original})
-            
-            # 6. Создаем связи (только если их нет)
-            if person:
-                existing_link = db.query(Link).filter(
-                    Link.from_guid == person.guid,
-                    Link.to_guid == point.guid,
-                    Link.relation_type == "collected_at"
-                ).first()
-                if not existing_link:
-                    db.add(Link(
-                        from_guid=person.guid,
-                        to_guid=point.guid,
-                        from_type="person",
-                        to_type="point",
-                        relation_type="collected_at",
-                        direction="one_to_many",
-                        is_directed=1,
-                        created_at=now,
-                        updated_at=now
-                    ))
-                    new_links += 1
-            
-            if taxon:
-                existing_link = db.query(Link).filter(
-                    Link.from_guid == taxon.guid,
-                    Link.to_guid == point.guid,
-                    Link.relation_type == "has_taxon"
-                ).first()
-                if not existing_link:
-                    db.add(Link(
-                        from_guid=taxon.guid,
-                        to_guid=point.guid,
-                        from_type="taxon",
-                        to_type="point",
-                        relation_type="has_taxon",
-                        direction="many_to_many",
-                        is_directed=1,
-                        created_at=now,
-                        updated_at=now
-                    ))
-                    new_links += 1
-            
-            if study:
-                existing_link = db.query(Link).filter(
-                    Link.from_guid == point.guid,
-                    Link.to_guid == study.guid,
-                    Link.relation_type == "source"
-                ).first()
-                if not existing_link:
-                    db.add(Link(
-                        from_guid=point.guid,
-                        to_guid=study.guid,
-                        from_type="point",
-                        to_type="study",
-                        relation_type="source",
-                        direction="many_to_many",
-                        is_directed=1,
-                        created_at=now,
-                        updated_at=now
-                    ))
-                    new_links += 1
-                
-                if taxon:
-                    existing_link = db.query(Link).filter(
-                        Link.from_guid == taxon.guid,
-                        Link.to_guid == study.guid,
-                        Link.relation_type == "source"
-                    ).first()
-                    if not existing_link:
-                        db.add(Link(
-                            from_guid=taxon.guid,
-                            to_guid=study.guid,
-                            from_type="taxon",
-                            to_type="study",
-                            relation_type="source",
-                            direction="many_to_many",
-                            is_directed=1,
-                            created_at=now,
-                            updated_at=now
-                        ))
-                        new_links += 1
-            
-            point.updated_at = now
-            
-        except Exception as e:
-            errors.append({"row": idx + 2, "error": str(e)})
-    
-    db.commit()
-    db.close()
-    
-    message_parts = []
-    if len(imported_points) > 0:
-        message_parts.append(f"создано {len(imported_points)} новых точек")
-    if len(linked_points) > 0:
-        message_parts.append(f"обновлено {len(linked_points)} существующих точек")
-    if len(new_taxa) > 0:
-        message_parts.append(f"создано {len(new_taxa)} таксонов")
-    if len(new_persons) > 0:
-        message_parts.append(f"создано {len(new_persons)} сборщиков")
-    if len(new_studies) > 0:
-        message_parts.append(f"создано {len(new_studies)} исследований")
-    if new_links > 0:
-        message_parts.append(f"добавлено {new_links} новых связей")
-    
-    message = f"Импорт завершен. {', '.join(message_parts)}."
-    
-    return {
-        "message": message,
-        "points_created": len(imported_points),
-        "points_updated": len(linked_points),
-        "taxa_created": len(new_taxa),
-        "persons_created": len(new_persons),
-        "studies_created": len(new_studies),
-        "links_added": new_links,
-        "errors": errors
-    }
+    return results
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
-
