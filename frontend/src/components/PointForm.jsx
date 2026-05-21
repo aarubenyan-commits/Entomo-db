@@ -60,9 +60,10 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
   const [geocoding, setGeocoding] = useState(false);
   const [pointTaxa, setPointTaxa] = useState([]);
   const [showTaxonSelector, setShowTaxonSelector] = useState(false);
-  const [taxonSearch, setTaxonSearch] = useState('');
-  const [taxonResults, setTaxonResults] = useState([]);
-  const [linkedTaxa, setLinkedTaxa] = useState([]);
+  const [allSpecies, setAllSpecies] = useState([]);
+  const [allSubspecies, setAllSubspecies] = useState([]);
+  const [expandedGenera, setExpandedGenera] = useState({});
+  const [expandedSpecies, setExpandedSpecies] = useState({});
 
   useEffect(() => {
     axios.get(`${API_URL}/persons`)
@@ -77,11 +78,14 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
   }, []);
 
   useEffect(() => {
+    loadAllTaxa();
+  }, []);
+
+  useEffect(() => {
     if (point?.guid) {
       axios.get(`${API_URL}/point_taxa/${point.guid}`)
         .then(res => {
           setPointTaxa(res.data);
-          setLinkedTaxa(res.data.map(t => t.guid));
         })
         .catch(err => console.error(err));
     }
@@ -100,6 +104,19 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
     }
     setCoordString(initialCoord);
   }, [initialLat, initialLng, point?.latitude, point?.longitude]);
+
+  const loadAllTaxa = async () => {
+    try {
+      const [speciesRes, subspeciesRes] = await Promise.all([
+        axios.get(`${API_URL}/species`),
+        axios.get(`${API_URL}/subspecies`)
+      ]);
+      setAllSpecies(speciesRes.data);
+      setAllSubspecies(subspeciesRes.data);
+    } catch (error) {
+      console.error('Ошибка загрузки таксонов:', error);
+    }
+  };
 
   const loadSources = async () => {
     if (!point?.guid) return;
@@ -181,20 +198,15 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
     reverseGeocodeNominatim(latitude, longitude);
   };
 
-  const searchTaxa = async () => {
-    if (!taxonSearch.trim()) return;
-    const res = await axios.get(`${API_URL}/taxa/search?q=${encodeURIComponent(taxonSearch)}`);
-    setTaxonResults(res.data);
-  };
-
-  const addTaxonToPoint = async (taxonGuid) => {
+  const addTaxonToPoint = async (taxonGuid, taxonType) => {
     if (!point?.guid) return;
-    await axios.post(`${API_URL}/point_taxa/${point.guid}/${taxonGuid}`);
-    const res = await axios.get(`${API_URL}/point_taxa/${point.guid}`);
-    setPointTaxa(res.data);
-    setLinkedTaxa(res.data.map(t => t.guid));
-    setTaxonSearch('');
-    setTaxonResults([]);
+    try {
+      await axios.post(`${API_URL}/point_taxa/${point.guid}/${taxonGuid}`);
+      const res = await axios.get(`${API_URL}/point_taxa/${point.guid}`);
+      setPointTaxa(res.data);
+    } catch (error) {
+      console.error('Ошибка привязки таксона:', error);
+    }
   };
 
   const removeTaxon = async (taxonGuid) => {
@@ -202,15 +214,24 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
     await axios.delete(`${API_URL}/point_taxa/${point.guid}/${taxonGuid}`);
     const res = await axios.get(`${API_URL}/point_taxa/${point.guid}`);
     setPointTaxa(res.data);
-    setLinkedTaxa(res.data.map(t => t.guid));
+  };
+
+  const toggleGenus = (genus) => {
+    setExpandedGenera(prev => ({ ...prev, [genus]: !prev[genus] }));
+  };
+
+  const toggleSpecies = (speciesGuid) => {
+    setExpandedSpecies(prev => ({ ...prev, [speciesGuid]: !prev[speciesGuid] }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.collector_name.trim()) {
-      alert('Укажите сборщика');
-      return;
-    }
+// Сборщик необязателен - только предупреждение
+if (!formData.collector_name.trim()) {
+  if (!window.confirm('Сборщик не указан. Продолжить без сборщика?')) {
+    return;
+  }
+}
     if (latitude === null || longitude === null) {
       alert('Введите координаты и нажмите кнопку "Распознать"');
       return;
@@ -253,6 +274,17 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
     }
   };
 
+  // Группировка видов по родам
+  const speciesByGenus = {};
+  for (const s of allSpecies) {
+    if (!speciesByGenus[s.genus]) speciesByGenus[s.genus] = [];
+    speciesByGenus[s.genus].push(s);
+  }
+
+  const isTaxonLinked = (taxonGuid) => {
+    return pointTaxa.some(t => t.guid === taxonGuid);
+  };
+
   return (
     <div style={{
       position: 'fixed',
@@ -270,7 +302,7 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
         backgroundColor: 'white',
         padding: '20px',
         borderRadius: '8px',
-        width: '550px',
+        width: '600px',
         maxHeight: '90vh',
         overflow: 'auto',
       }}>
@@ -349,48 +381,100 @@ const PointForm = ({ point, initialLat, initialLng, onClose, onSave }) => {
             )}
           </div>
           
-          {point?.guid && (
-            <div style={{ marginBottom: '15px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Таксоны:</label>
-              {pointTaxa.length === 0 ? (
-                <div style={{ padding: '20px', textAlign: 'center', color: '#999', border: '1px solid #ddd', borderRadius: '4px' }}>Нет привязанных таксонов</div>
-              ) : (
-                <div>
-                  {pointTaxa.map(t => (
-                    <div key={t.guid} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', borderBottom: '1px solid #eee', backgroundColor: '#fafafa' }}>
-                      <span>{t.display_name || `${t.genus} ${t.species || ''}`}</span>
-                      <button type="button" onClick={() => removeTaxon(t.guid)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#e74c3c' }}>🗑️</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <button type="button" onClick={() => setShowTaxonSelector(!showTaxonSelector)} style={{ marginTop: '8px', padding: '4px 12px', fontSize: '12px', background: '#3498db', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                {showTaxonSelector ? 'Скрыть' : '➕ Добавить таксон'}
-              </button>
-              {showTaxonSelector && (
-                <div style={{ marginTop: '10px', padding: '10px', border: '1px solid #ccc', borderRadius: '4px' }}>
-                  <div style={{ display: 'flex', gap: '10px' }}>
-                    <input type="text" placeholder="Название таксона..." value={taxonSearch} onChange={(e) => setTaxonSearch(e.target.value)} style={{ flex: 1, padding: '6px' }} />
-                    <button type="button" onClick={searchTaxa}>🔍 Найти</button>
+          <div style={{ marginBottom: '15px' }}>
+            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Таксоны:</label>
+            {pointTaxa.length === 0 ? (
+              <div style={{ padding: '15px', textAlign: 'center', color: '#999', border: '1px solid #ddd', borderRadius: '4px' }}>Нет привязанных таксонов</div>
+            ) : (
+              <div style={{ border: '1px solid #ddd', borderRadius: '4px', marginBottom: '10px', maxHeight: '200px', overflow: 'auto' }}>
+                {pointTaxa.map(t => (
+                  <div key={t.guid} style={{ padding: '8px 12px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span><strong>{t.genus}</strong> <em>{t.species || ''}</em> {t.subspecies && <em>({t.subspecies})</em>}</span>
+                    <button type="button" onClick={() => removeTaxon(t.guid)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#e74c3c' }}>✖</button>
                   </div>
-                  {taxonResults.length > 0 && (
-                    <ul style={{ marginTop: '10px', paddingLeft: '20px', maxHeight: '150px', overflow: 'auto' }}>
-                      {taxonResults.map(t => (
-                        <li key={t.guid} style={{ marginBottom: '5px' }}>
-                          {t.display_name || `${t.genus} ${t.species || ''}`}
-                          {linkedTaxa.includes(t.guid) ? (
-                            <span style={{ marginLeft: '10px', color: 'green' }}>✓ Уже привязан</span>
-                          ) : (
-                            <button type="button" onClick={() => addTaxonToPoint(t.guid)}>➕ Привязать</button>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+            <button type="button" onClick={() => setShowTaxonSelector(!showTaxonSelector)} style={{ marginTop: '8px', padding: '4px 12px', fontSize: '12px', background: '#3498db', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+              {showTaxonSelector ? 'Скрыть' : '➕ Добавить таксон'}
+            </button>
+            
+            {showTaxonSelector && allSpecies.length > 0 && (
+              <div style={{ marginTop: '10px', padding: '10px', border: '1px solid #ddd', borderRadius: '4px', maxHeight: '300px', overflow: 'auto' }}>
+                {Object.keys(speciesByGenus).sort().map(genus => (
+                  <div key={genus} style={{ marginBottom: '4px' }}>
+                    <div 
+                      style={{ padding: '6px 4px', display: 'flex', alignItems: 'center', cursor: 'pointer', background: '#f5f5f5', borderRadius: '4px' }}
+                      onClick={() => toggleGenus(genus)}
+                    >
+                      <span style={{ fontSize: '12px', marginRight: '8px', userSelect: 'none' }}>
+                        {expandedGenera[genus] ? '▼' : '▶'}
+                      </span>
+                      <span style={{ fontWeight: 'bold' }}>{genus}</span>
+                    </div>
+                    {expandedGenera[genus] && (
+                      <div style={{ paddingLeft: '20px', marginTop: '4px' }}>
+                        {speciesByGenus[genus].map(species => {
+                          const subspeciesList = allSubspecies.filter(ss => ss.species_guid === species.guid);
+                          const hasSubspecies = subspeciesList.length > 0;
+                          const isLinked = isTaxonLinked(species.guid);
+                          return (
+                            <div key={species.guid} style={{ marginBottom: '2px' }}>
+                              <div 
+                                style={{ padding: '4px 4px', display: 'flex', alignItems: 'center', cursor: 'pointer', borderLeft: '2px solid #ddd' }}
+                                onClick={() => hasSubspecies && toggleSpecies(species.guid)}
+                              >
+                                {hasSubspecies && (
+                                  <span style={{ fontSize: '11px', marginRight: '6px', userSelect: 'none' }}>
+                                    {expandedSpecies[species.guid] ? '▼' : '▶'}
+                                  </span>
+                                )}
+                                <span style={{ fontStyle: 'italic', flex: 1 }}>{species.species_name}</span>
+                                {isLinked ? (
+                                  <span style={{ fontSize: '11px', color: 'green', marginRight: '8px' }}>✓</span>
+                                ) : (
+                                  <button 
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); addTaxonToPoint(species.guid, 'species'); }}
+                                    style={{ padding: '2px 8px', background: '#27ae60', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}
+                                  >
+                                    Привязать вид
+                                  </button>
+                                )}
+                              </div>
+                              {expandedSpecies[species.guid] && hasSubspecies && (
+                                <div style={{ paddingLeft: '20px', borderLeft: '2px solid #ddd', marginLeft: '10px' }}>
+                                  {subspeciesList.map(ss => {
+                                    const isLinkedSub = isTaxonLinked(ss.guid);
+                                    return (
+                                      <div key={ss.guid} style={{ padding: '4px 4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
+                                        <span style={{ color: '#666' }}>└─ <em>{ss.subspecies_name}</em></span>
+                                        {isLinkedSub ? (
+                                          <span style={{ fontSize: '11px', color: 'green' }}>✓</span>
+                                        ) : (
+                                          <button 
+                                            type="button"
+                                            onClick={() => addTaxonToPoint(ss.guid, 'subspecies')}
+                                            style={{ padding: '2px 8px', background: '#27ae60', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}
+                                          >
+                                            Привязать подвид
+                                          </button>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           
           <div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between', marginTop: '20px' }}>
             <button type="button" onClick={loadSources} style={{ padding: '8px 16px', background: '#9b59b6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>

@@ -5,125 +5,130 @@ import { IconButton } from './IconLibrary';
 const API_URL = 'http://127.0.0.1:8000';
 
 const TaxonManager = ({ onClose, onUpdate }) => {
-  const [taxa, setTaxa] = useState([]);
-  const [editingGuid, setEditingGuid] = useState(null);
-  const [showSourcesDialog, setShowSourcesDialog] = useState(false);
-  const [currentTaxon, setCurrentTaxon] = useState(null);
-  const [sources, setSources] = useState([]);
-  const [selectedStudy, setSelectedStudy] = useState(null);
-  const [showStudyDialog, setShowStudyDialog] = useState(false);
-  const [formData, setFormData] = useState({
-    genus: '',
-    species: '',
-    subspecies: '',
-    display_name: ''
-  });
+  const [allSpecies, setAllSpecies] = useState([]);
+  const [allSubspecies, setAllSubspecies] = useState([]);
+  const [expandedGenera, setExpandedGenera] = useState({});
+  const [expandedSpecies, setExpandedSpecies] = useState({});
+  const [showAddGenus, setShowAddGenus] = useState(false);
+  const [showAddSpecies, setShowAddSpecies] = useState(null);
+  const [newGenusName, setNewGenusName] = useState('');
+  const [newSpeciesName, setNewSpeciesName] = useState('');
+  const [showAddSubspecies, setShowAddSubspecies] = useState(null);
+  const [newSubspeciesName, setNewSubspeciesName] = useState('');
 
   useEffect(() => {
-    fetchTaxa();
+    fetchData();
   }, []);
 
-  const fetchTaxa = async () => {
+  const fetchData = async () => {
     try {
-      const res = await axios.get(`${API_URL}/taxa`);
-      const sorted = res.data.sort((a, b) => {
-        const nameA = `${a.genus} ${a.species || ''}`.toLowerCase();
-        const nameB = `${b.genus} ${b.species || ''}`.toLowerCase();
-        if (nameA < nameB) return -1;
-        if (nameA > nameB) return 1;
-        return 0;
+      const [speciesRes, subspeciesRes] = await Promise.all([
+        axios.get(`${API_URL}/species`),
+        axios.get(`${API_URL}/subspecies`)
+      ]);
+      setAllSpecies(speciesRes.data);
+      setAllSubspecies(subspeciesRes.data);
+    } catch (error) {
+      console.error('Ошибка загрузки:', error);
+    }
+  };
+
+  const handleAddGenus = async () => {
+    if (!newGenusName.trim()) {
+      alert('Укажите название рода');
+      return;
+    }
+    // Создаем временный вид для рода (без вида)
+    try {
+      // Род можно создать только через вид, поэтому используем временное название вида
+      await axios.post(`${API_URL}/species`, null, {
+        params: {
+          genus: newGenusName,
+          species_name: "sp.",
+          display_name: newGenusName
+        }
       });
-      setTaxa(sorted);
+      setNewGenusName('');
+      setShowAddGenus(false);
+      fetchData();
     } catch (error) {
-      console.error('Ошибка загрузки таксонов:', error);
+      alert('Ошибка создания рода');
     }
   };
 
-  const openStudyDetails = (study) => {
-    setSelectedStudy(study);
-    setShowStudyDialog(true);
-  };
-
-  const loadSources = async (taxonGuid, taxonName) => {
-    setCurrentTaxon({ guid: taxonGuid, name: taxonName });
-    try {
-      const res = await axios.get(`${API_URL}/sources/taxon/${taxonGuid}`);
-      setSources(res.data);
-      setShowSourcesDialog(true);
-    } catch (error) {
-      console.error('Ошибка загрузки источников:', error);
-    }
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!formData.genus.trim()) {
-      alert('Укажите род');
+  const handleAddSpecies = async (genus) => {
+    if (!newSpeciesName.trim()) {
+      alert('Укажите название вида');
       return;
     }
-    
-    const displayName = formData.display_name || `${formData.genus} ${formData.species || ''} ${formData.subspecies || ''}`.trim();
-    const existingTaxon = !editingGuid && taxa.find(t => 
-      t.genus.toLowerCase() === formData.genus.toLowerCase() &&
-      (t.species || '').toLowerCase() === (formData.species || '').toLowerCase() &&
-      (t.subspecies || '').toLowerCase() === (formData.subspecies || '').toLowerCase()
-    );
-    
-    if (existingTaxon) {
-      alert(`Таксон "${existingTaxon.display_name}" уже существует!`);
+    try {
+      await axios.post(`${API_URL}/species`, null, {
+        params: {
+          genus: genus,
+          species_name: newSpeciesName,
+          display_name: `${genus} ${newSpeciesName}`
+        }
+      });
+      setNewSpeciesName('');
+      setShowAddSpecies(null);
+      fetchData();
+      // Раскрываем род после добавления
+      setExpandedGenera(prev => ({ ...prev, [genus]: true }));
+    } catch (error) {
+      alert('Ошибка создания вида');
+    }
+  };
+
+  const handleAddSubspecies = async (speciesGuid) => {
+    if (!newSubspeciesName.trim()) {
+      alert('Укажите название подвида');
       return;
     }
-    
     try {
-      let response;
-      if (editingGuid) {
-        response = await axios.put(`${API_URL}/taxa/${editingGuid}`, formData);
-      } else {
-        response = await axios.post(`${API_URL}/taxa`, null, {
-          params: {
-            genus: formData.genus,
-            species: formData.species || null,
-            subspecies: formData.subspecies || null,
-            display_name: formData.display_name || null
-          }
-        });
-      }
-      await fetchTaxa();
-      if (onUpdate) onUpdate(response?.data?.guid);
-      resetForm();
+      await axios.post(`${API_URL}/subspecies`, null, {
+        params: {
+          species_guid: speciesGuid,
+          subspecies_name: newSubspeciesName
+        }
+      });
+      setNewSubspeciesName('');
+      setShowAddSubspecies(null);
+      fetchData();
     } catch (error) {
-      console.error('Ошибка сохранения:', error);
-      alert('Ошибка сохранения таксона: ' + (error.response?.data?.detail || error.message));
+      alert('Ошибка добавления подвида');
     }
   };
 
-  const handleEdit = (taxon) => {
-    setEditingGuid(taxon.guid);
-    setFormData({
-      genus: taxon.genus || '',
-      species: taxon.species || '',
-      subspecies: taxon.subspecies || '',
-      display_name: taxon.display_name || ''
-    });
-  };
-
-  const handleDelete = async (guid) => {
-    if (window.confirm('Удалить этот таксон?')) {
+  const handleDelete = async (guid, type) => {
+    if (window.confirm(`Удалить ${type === 'species' ? 'вид' : 'подвид'}?`)) {
       try {
-        await axios.delete(`${API_URL}/taxa/${guid}`);
-        await fetchTaxa();
-        if (onUpdate) onUpdate(false);
+        if (type === 'species') {
+          await axios.delete(`${API_URL}/species/${guid}`);
+        } else {
+          await axios.delete(`${API_URL}/subspecies/${guid}`);
+        }
+        fetchData();
+        if (onUpdate) onUpdate();
       } catch (error) {
-        console.error('Ошибка удаления:', error);
-        alert('Ошибка удаления таксона');
+        alert('Ошибка удаления');
       }
     }
   };
 
-  const resetForm = () => {
-    setEditingGuid(null);
-    setFormData({ genus: '', species: '', subspecies: '', display_name: '' });
+  const toggleGenus = (genus) => {
+    setExpandedGenera(prev => ({ ...prev, [genus]: !prev[genus] }));
   };
+
+  const toggleSpecies = (speciesGuid) => {
+    setExpandedSpecies(prev => ({ ...prev, [speciesGuid]: !prev[speciesGuid] }));
+  };
+
+  // Группировка видов по родам
+  const speciesByGenus = {};
+  for (const s of allSpecies) {
+    if (!speciesByGenus[s.genus]) speciesByGenus[s.genus] = [];
+    speciesByGenus[s.genus].push(s);
+  }
 
   return (
     <div style={{
@@ -142,186 +147,150 @@ const TaxonManager = ({ onClose, onUpdate }) => {
         backgroundColor: 'white',
         padding: '20px',
         borderRadius: '8px',
-        width: '650px',
+        width: '700px',
         maxHeight: '90vh',
         overflow: 'auto',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h2 style={{ margin: 0 }}>{editingGuid ? 'Редактировать таксон' : 'Новый таксон'}</h2>
-          <IconButton icon="Close" onClick={() => { resetForm(); onClose(); }} style={{ padding: '4px', fontSize: '18px' }} />
+          <h2 style={{ margin: 0 }}>Управление таксонами</h2>
+          <IconButton icon="Close" onClick={() => { onClose(); }} style={{ padding: '4px', fontSize: '18px' }} />
+        </div>
+
+        {/* Дерево таксонов */}
+        <div style={{ maxHeight: '70vh', overflow: 'auto', border: '1px solid #eee', borderRadius: '8px', padding: '10px' }}>
+          {/* Кнопка создания нового рода */}
+          {!showAddGenus ? (
+            <div style={{ marginBottom: '15px', padding: '4px', display: 'flex', justifyContent: 'flex-start' }}>
+              <span 
+                onClick={() => setShowAddGenus(true)}
+                style={{ cursor: 'pointer', color: '#27ae60', fontSize: '14px', fontWeight: 'bold' }}
+              >
+                ➕ Создать род
+              </span>
+            </div>
+          ) : (
+            <div style={{ marginBottom: '15px', padding: '8px', background: '#f9f9f9', borderRadius: '4px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="text"
+                placeholder="Название рода"
+                value={newGenusName}
+                onChange={(e) => setNewGenusName(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleAddGenus()}
+                style={{ flex: 1, padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
+                autoFocus
+              />
+              <IconButton icon="Save" onClick={handleAddGenus} style={{ background: '#27ae60', color: 'white', padding: '4px 8px' }} />
+              <IconButton icon="Close" onClick={() => setShowAddGenus(false)} style={{ background: '#95a5a6', color: 'white', padding: '4px 8px' }} />
+            </div>
+          )}
+
+          {Object.keys(speciesByGenus).length === 0 ? (
+            <div style={{ textAlign: 'center', color: '#999', padding: '20px' }}>Нет таксонов</div>
+          ) : (
+            Object.keys(speciesByGenus).sort().map(genus => (
+              <div key={genus} style={{ marginBottom: '8px' }}>
+                <div 
+                  style={{ padding: '6px 4px', display: 'flex', alignItems: 'center', cursor: 'pointer', background: '#f5f5f5', borderRadius: '4px', justifyContent: 'space-between' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center' }} onClick={() => toggleGenus(genus)}>
+                    <span style={{ fontSize: '12px', marginRight: '8px', userSelect: 'none' }}>
+                      {expandedGenera[genus] ? '▼' : '▶'}
+                    </span>
+                    <span style={{ fontWeight: 'bold' }}>{genus}</span>
+                  </div>
+                  <span 
+                    onClick={() => { setShowAddSpecies(genus); setNewSpeciesName(''); }}
+                    style={{ cursor: 'pointer', color: '#27ae60', fontSize: '12px', padding: '2px 6px' }}
+                  >
+                    ✚ добавить вид
+                  </span>
+                </div>
+                
+                {expandedGenera[genus] && (
+                  <div style={{ paddingLeft: '20px', marginTop: '4px' }}>
+                    {showAddSpecies === genus && (
+                      <div style={{ marginBottom: '8px', padding: '8px', background: '#f9f9f9', borderRadius: '4px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <input
+                          type="text"
+                          placeholder="Название вида"
+                          value={newSpeciesName}
+                          onChange={(e) => setNewSpeciesName(e.target.value)}
+                          onKeyPress={(e) => e.key === 'Enter' && handleAddSpecies(genus)}
+                          style={{ flex: 1, padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
+                          autoFocus
+                        />
+                        <IconButton icon="Save" onClick={() => handleAddSpecies(genus)} style={{ background: '#27ae60', color: 'white', padding: '4px 8px' }} />
+                        <IconButton icon="Close" onClick={() => setShowAddSpecies(null)} style={{ background: '#95a5a6', color: 'white', padding: '4px 8px' }} />
+                      </div>
+                    )}
+                    
+                    {speciesByGenus[genus].map(species => {
+                      const subspeciesList = allSubspecies.filter(ss => ss.species_guid === species.guid);
+                      const hasSubspecies = subspeciesList.length > 0;
+                      const isAddingSubspecies = showAddSubspecies === species.guid;
+                      return (
+                        <div key={species.guid} style={{ marginBottom: '4px' }}>
+                          <div 
+                            style={{ padding: '4px 4px', display: 'flex', alignItems: 'center', borderLeft: '2px solid #ddd', justifyContent: 'space-between' }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }} onClick={() => hasSubspecies && toggleSpecies(species.guid)}>
+                              {hasSubspecies && (
+                                <span style={{ fontSize: '11px', marginRight: '6px', userSelect: 'none' }}>
+                                  {expandedSpecies[species.guid] ? '▼' : '▶'}
+                                </span>
+                              )}
+                              <span style={{ fontStyle: 'italic' }}>{species.species_name}</span>
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <span 
+                                onClick={() => { setShowAddSubspecies(species.guid); setNewSubspeciesName(''); }}
+                                style={{ cursor: 'pointer', color: '#27ae60', fontSize: '11px' }}
+                              >
+                                ✚ подвид
+                              </span>
+                              <IconButton icon="Delete" onClick={() => handleDelete(species.guid, 'species')} style={{ color: '#e74c3c', padding: '2px' }} />
+                            </div>
+                          </div>
+                          
+                          {expandedSpecies[species.guid] && hasSubspecies && (
+                            <div style={{ paddingLeft: '20px', borderLeft: '2px solid #ddd', marginLeft: '10px' }}>
+                              {subspeciesList.map(ss => (
+                                <div key={ss.guid} style={{ padding: '4px 4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
+                                  <span style={{ color: '#666' }}>└─ <em>{ss.subspecies_name}</em></span>
+                                  <IconButton icon="Delete" onClick={() => handleDelete(ss.guid, 'subspecies')} style={{ color: '#e74c3c', padding: '2px' }} />
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          
+                          {isAddingSubspecies && (
+                            <div style={{ marginTop: '8px', marginBottom: '8px', padding: '8px', background: '#f9f9f9', borderRadius: '4px', display: 'flex', gap: '8px', alignItems: 'center', marginLeft: '20px' }}>
+                              <input
+                                type="text"
+                                placeholder="Название подвида"
+                                value={newSubspeciesName}
+                                onChange={(e) => setNewSubspeciesName(e.target.value)}
+                                onKeyPress={(e) => e.key === 'Enter' && handleAddSubspecies(species.guid)}
+                                style={{ flex: 1, padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }}
+                                autoFocus
+                              />
+                              <IconButton icon="Save" onClick={() => handleAddSubspecies(species.guid)} style={{ background: '#27ae60', color: 'white', padding: '4px 8px' }} />
+                              <IconButton icon="Close" onClick={() => setShowAddSubspecies(null)} style={{ background: '#95a5a6', color: 'white', padding: '4px 8px' }} />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
         </div>
         
-        <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: '15px' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Род (genus):</label>
-            <input
-              type="text"
-              value={formData.genus}
-              onChange={(e) => setFormData({...formData, genus: e.target.value})}
-              required
-              style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-            />
-          </div>
-          
-          <div style={{ marginBottom: '15px' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Вид (species):</label>
-            <input
-              type="text"
-              value={formData.species}
-              onChange={(e) => setFormData({...formData, species: e.target.value})}
-              style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-            />
-          </div>
-          
-          <div style={{ marginBottom: '15px' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Подвид (subspecies):</label>
-            <input
-              type="text"
-              value={formData.subspecies}
-              onChange={(e) => setFormData({...formData, subspecies: e.target.value})}
-              style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-            />
-          </div>
-          
-          <div style={{ marginBottom: '15px' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Отображаемое имя:</label>
-            <input
-              type="text"
-              value={formData.display_name}
-              onChange={(e) => setFormData({...formData, display_name: e.target.value})}
-              placeholder="Оставьте пустым для автоматического формирования"
-              style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-            />
-          </div>
-          
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '20px' }}>
-            <IconButton icon="Close" label="Отмена" onClick={() => { resetForm(); onClose(); }} style={{ background: '#95a5a6', color: 'white' }} />
-            <IconButton icon="Save" label="Сохранить" type="submit" style={{ background: '#27ae60', color: 'white' }} />
-          </div>
-        </form>
-        
-        {taxa.length > 0 && (
-          <div style={{ marginTop: '20px', borderTop: '1px solid #ddd', paddingTop: '15px' }}>
-            <h3>Список таксонов</h3>
-            <div style={{ maxHeight: '300px', overflow: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: '#f5f5f5', borderBottom: '1px solid #ddd' }}>
-                    <th style={{ padding: '8px', textAlign: 'left' }}>Название</th>
-                    <th style={{ padding: '8px', textAlign: 'center', width: '120px' }}>Действия</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {taxa.map(t => (
-                    <tr key={t.guid} style={{ borderBottom: '1px solid #eee' }}>
-                      <td style={{ padding: '8px' }}>
-                        <strong>{t.genus}</strong> {t.species || ''} {t.subspecies || ''}
-                      </td>
-                      <td style={{ padding: '8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                        <IconButton icon="Edit" onClick={() => handleEdit(t)} title="Редактировать" />
-                        <IconButton icon="Study" onClick={() => loadSources(t.guid, t.display_name)} title="Источники" style={{ color: '#9b59b6' }} />
-                        <IconButton icon="Delete" onClick={() => handleDelete(t.guid)} title="Удалить" style={{ color: '#e74c3c' }} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {showStudyDialog && selectedStudy && (
-          <div style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            zIndex: 2001,
-          }}>
-            <div style={{
-              backgroundColor: 'white',
-              padding: '20px',
-              borderRadius: '8px',
-              width: '600px',
-              maxHeight: '80vh',
-              overflow: 'auto',
-            }}>
-              <h3>Детали исследования</h3>
-              <div style={{ marginBottom: '15px' }}><strong>Название:</strong> {selectedStudy.title || selectedStudy.url}</div>
-              {selectedStudy.authors && <div style={{ marginBottom: '15px' }}><strong>Автор(ы):</strong> {selectedStudy.authors}</div>}
-              {selectedStudy.url && <div style={{ marginBottom: '15px' }}><strong>Ссылка:</strong> <a href={selectedStudy.url} target="_blank" rel="noopener noreferrer">{selectedStudy.url}</a></div>}
-              {selectedStudy.description && (
-                <div style={{ marginBottom: '15px' }}>
-                  <strong>Описание:</strong>
-                  <div style={{ marginTop: '5px', padding: '10px', background: '#f9f9f9', borderRadius: '4px', maxHeight: '200px', overflow: 'auto' }}>
-                    {selectedStudy.description}
-                  </div>
-                </div>
-              )}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
-                <IconButton icon="Close" label="Закрыть" onClick={() => setShowStudyDialog(false)} style={{ background: '#95a5a6', color: 'white' }} />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {showSourcesDialog && (
-          <div style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.5)',
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            zIndex: 2000,
-          }}>
-            <div style={{
-              backgroundColor: 'white',
-              padding: '20px',
-              borderRadius: '8px',
-              width: '500px',
-              maxHeight: '80vh',
-              overflow: 'auto',
-            }}>
-              <h3>Источники данных для таксона: <strong>{currentTaxon?.name}</strong></h3>
-              {sources.length === 0 ? (
-                <p style={{ color: '#999' }}>Нет привязанных источников</p>
-              ) : (
-                <div style={{ border: '1px solid #ddd', borderRadius: '4px', overflow: 'hidden' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                    <thead>
-                      <tr style={{ background: '#f5f5f5', borderBottom: '1px solid #ddd' }}>
-                        <th style={{ padding: '8px', textAlign: 'left' }}>Название</th>
-                        <th style={{ padding: '8px', textAlign: 'left' }}>Автор(ы)</th>
-                       </tr>
-                    </thead>
-                    <tbody>
-                      {sources.map(s => (
-                        <tr key={s.link_guid} style={{ borderBottom: '1px solid #eee', cursor: 'pointer' }} onClick={() => openStudyDetails(s)}>
-                          <td style={{ padding: '8px' }}>
-                            {s.title ? <strong>{s.title}</strong> : <a href={s.url} target="_blank" rel="noopener noreferrer">{s.url}</a>}
-                           </td>
-                          <td style={{ padding: '8px' }}>{s.authors || '—'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}>
-                <IconButton icon="Close" label="Закрыть" onClick={() => setShowSourcesDialog(false)} style={{ background: '#95a5a6', color: 'white' }} />
-              </div>
-            </div>
-          </div>
-        )}
+        <div style={{ marginTop: '20px', textAlign: 'right' }}>
+          <IconButton icon="Close" label="Закрыть" onClick={() => { if (onUpdate) onUpdate(); onClose(); }} style={{ background: '#3498db', color: 'white' }} />
+        </div>
       </div>
     </div>
   );

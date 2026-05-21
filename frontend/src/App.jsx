@@ -68,7 +68,7 @@ function App() {
     try {
       const pointsRes = await axios.get(`${API_URL}/points`);
       const personsRes = await axios.get(`${API_URL}/persons`);
-      const taxaRes = await axios.get(`${API_URL}/taxa`);
+      const taxaRes = await axios.get(`${API_URL}/species`);
       setTaxa(taxaRes.data);
       setPersons(personsRes.data);
       

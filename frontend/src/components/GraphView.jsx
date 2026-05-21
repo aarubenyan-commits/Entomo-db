@@ -59,12 +59,12 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
         });
       });
 
-      // Таксоны
+      // Виды
       taxaRes.data.forEach(t => {
         nodes.push({ 
           id: t.guid, 
           name: t.display_name || `${t.genus} ${t.species || ''}`, 
-          type: 'taxon', 
+          type: 'species', 
           group: 3,
           showLabel: true, // всегда показываем текст
           genus: t.genus, 
@@ -249,7 +249,7 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
     switch (node.type) {
       case 'person': return '#3498db';
       case 'point': return '#2ecc71';
-      case 'taxon': return '#9b59b6';
+      case 'species': return '#9b59b6';
       case 'study': return '#f39c12';
       default: return '#95a5a6';
     }
@@ -260,18 +260,18 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
     switch (node.type) {
       case 'point': return 2;   // было 10, уменьшили на 70%
       case 'person': return 2;
-      case 'taxon': return 2;
+      case 'species': return 2;
       case 'study': return 2;
-      default: return 6;
+      default: return 2;
     }
   };
 
   // Отображение текста на узлах
   const getNodeLabel = (node) => {
-    const icon = node.type === 'person' ? '👤 ' : node.type === 'taxon' ? '🔬 ' : '';
+    const icon = node.type === 'person' ? '👤 ' : node.type === 'species' ? '🔬 ' : '';
     
-    // Для людей и таксонов всегда показываем текст
-    if (node.type === 'person' || node.type === 'taxon') {
+    // Для людей и видов всегда показываем текст
+    if (node.type === 'person' || node.type === 'species') {
       let label = node.name;
       if (label && label.length > 20) {
         label = label.substring(0, 17) + '...';
@@ -292,7 +292,7 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
         return `📚 ${node.name}\n✍️ ${node.authors || 'авторы не указаны'}`;
       case 'person':
         return `👤 ${node.name}`;
-      case 'taxon':
+      case 'species':
         return `🔬 ${node.name}`;
       default:
         return node.name;
@@ -303,7 +303,7 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
     switch (type) {
       case 'person': return '👤';
       case 'point': return '📍';
-      case 'taxon': return '🔬';
+      case 'species': return '🔬';
       case 'study': return '📚';
       default: return '📄';
     }
@@ -313,7 +313,7 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
     switch (type) {
       case 'person': return 'Сборщик';
       case 'point': return 'Точка сбора';
-      case 'taxon': return 'Таксон';
+      case 'species': return 'Вид';
       case 'study': return 'Исследование';
       default: return 'Объект';
     }
@@ -441,8 +441,8 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
               ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
               ctx.fill();
               
-              // Рисуем текст только для людей и таксонов
-              if (node.type === 'person' || node.type === 'taxon') {
+              // Рисуем текст только для людей и видов
+              if (node.type === 'person' || node.type === 'species') {
                 ctx.fillStyle = '#333';
                 ctx.font = `${Math.min(12, 12 / globalScale)}px Arial`;
                 ctx.textAlign = 'center';
@@ -532,7 +532,7 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
               </>
             )}
             
-            {nodeDetails.type === 'taxon' && (
+            {nodeDetails.type === 'species' && (
               <>
                 {nodeDetails.genus && (
                   <div style={{ marginBottom: '10px' }}>
@@ -629,7 +629,7 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
               onUpdate={() => handleEditComplete(true)}
             />
           )}
-          {editType === 'taxon' && (
+          {editType === 'species' && (
             <TaxonManager
               onClose={() => handleEditComplete(false)}
               onUpdate={() => handleEditComplete(true)}
@@ -648,3 +648,6 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
 };
 
 export default GraphView;
+
+// Дополнение для GraphView - поддержка species и subspecies
+// В функции loadConnections нужно добавить обработку типов "species" и "subspecies"
