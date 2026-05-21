@@ -123,7 +123,6 @@ const CollectorManager = ({ onClose, onUpdate }) => {
     if (!confirmAll) return;
 
     try {
-      // Используем новый эндпоинт bulk-update с replace_person
       const response = await axios.post(`${API_URL}/points/bulk-update`, {
         point_guids: selectedPointsArray,
         updates: {
@@ -168,7 +167,7 @@ const CollectorManager = ({ onClose, onUpdate }) => {
             <tbody>
               {collectors.map((c, idx) => (
                 <tr key={c.guid} style={{ borderBottom: '1px solid #eee' }}>
-                  <td style={{ padding: '8px' }}>{idx+1}.</td>
+                  <td style={{ padding: '8px' }}>{idx+1}</td>
                   <td style={{ padding: '8px' }}>
                     {editingId === c.guid ? (
                       <input type="text" value={editName} onChange={e => setEditName(e.target.value)} style={{ width: '100%', padding: '4px' }} />
@@ -200,7 +199,6 @@ const CollectorManager = ({ onClose, onUpdate }) => {
         </div>
       </div>
 
-      {/* Диалог удаления сборщика */}
       {deleteDialog && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,

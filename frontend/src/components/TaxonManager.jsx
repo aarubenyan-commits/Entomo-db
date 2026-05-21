@@ -230,7 +230,6 @@ const TaxonManager = ({ onClose, onUpdate }) => {
           </div>
         )}
 
-        {/* Модальные окна остаются без изменений */}
         {showStudyDialog && selectedStudy && (
           <div style={{
             position: 'fixed',
@@ -302,14 +301,14 @@ const TaxonManager = ({ onClose, onUpdate }) => {
                       <tr style={{ background: '#f5f5f5', borderBottom: '1px solid #ddd' }}>
                         <th style={{ padding: '8px', textAlign: 'left' }}>Название</th>
                         <th style={{ padding: '8px', textAlign: 'left' }}>Автор(ы)</th>
-                      </tr>
+                       </tr>
                     </thead>
                     <tbody>
                       {sources.map(s => (
                         <tr key={s.link_guid} style={{ borderBottom: '1px solid #eee', cursor: 'pointer' }} onClick={() => openStudyDetails(s)}>
                           <td style={{ padding: '8px' }}>
                             {s.title ? <strong>{s.title}</strong> : <a href={s.url} target="_blank" rel="noopener noreferrer">{s.url}</a>}
-                          </td>
+                           </td>
                           <td style={{ padding: '8px' }}>{s.authors || '—'}</td>
                         </tr>
                       ))}

@@ -258,10 +258,10 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
   // Размер узлов: точки меньше на 70%
   const getNodeSize = (node) => {
     switch (node.type) {
-      case 'point': return 3;   // было 10, уменьшили на 70%
-      case 'person': return 8;
-      case 'taxon': return 8;
-      case 'study': return 8;
+      case 'point': return 2;   // было 10, уменьшили на 70%
+      case 'person': return 2;
+      case 'taxon': return 2;
+      case 'study': return 2;
       default: return 6;
     }
   };

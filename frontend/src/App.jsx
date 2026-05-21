@@ -12,6 +12,7 @@ import BulkEditModal from './components/BulkEditModal';
 import ExportModal from './components/ExportModal';
 import MapView from './components/MapView';
 import { IconButton, Icons } from './components/IconLibrary';
+import FilterDrawer from './components/FilterDrawer';
 import GraphView from './components/GraphView';
 
 const API_URL = 'http://127.0.0.1:8000';
@@ -40,6 +41,11 @@ function App() {
   const [filterMonth, setFilterMonth] = useState('');
   const [filterDay, setFilterDay] = useState('');
   const [filterCollector, setFilterCollector] = useState('');
+  const [filterGenus, setFilterGenus] = useState("");
+  const [filterSpecies, setFilterSpecies] = useState("");
+  const [filterTaxonIds, setFilterTaxonIds] = useState([]);
+  const [taxa, setTaxa] = useState([]);
+
   const [highlightedRows, setHighlightedRows] = useState(new Set());
   const [showForm, setShowForm] = useState(false);
   const [showCollectorManager, setShowCollectorManager] = useState(false);
@@ -56,14 +62,27 @@ function App() {
   const tableBodyRef = useRef(null);
 
   useEffect(() => { fetchData(); }, []);
-  useEffect(() => { applyFilters(); }, [points, filterYear, filterMonth, filterDay, filterCollector]);
+  useEffect(() => { applyFilters(); }, [points, filterYear, filterMonth, filterDay, filterCollector, filterTaxonIds]);
 
   const fetchData = async () => {
     try {
       const pointsRes = await axios.get(`${API_URL}/points`);
-      setPoints(pointsRes.data);
       const personsRes = await axios.get(`${API_URL}/persons`);
+      const taxaRes = await axios.get(`${API_URL}/taxa`);
+      setTaxa(taxaRes.data);
       setPersons(personsRes.data);
+      
+      const pointsWithTaxa = await Promise.all(
+        pointsRes.data.map(async (point) => {
+          try {
+            const taxaResPoint = await axios.get(`${API_URL}/point_taxa/${point.guid}`);
+            return { ...point, taxon_ids: taxaResPoint.data.map(t => t.guid) };
+          } catch (e) {
+            return { ...point, taxon_ids: [] };
+          }
+        })
+      );
+      setPoints(pointsWithTaxa);
     } catch (error) { console.error(error); }
   };
 
@@ -71,8 +90,16 @@ function App() {
     let filtered = [...points];
     if (filterYear) filtered = filtered.filter(p => p.display_date?.includes(filterYear));
     if (filterMonth) filtered = filtered.filter(p => p.display_date?.match(`\\.${filterMonth}\\.`));
-    if (filterDay) filtered = filtered.filter(p => p.display_date?.startsWith(filterDay.padStart(2, '0')));
+    if (filterDay) filtered = filtered.filter(p => p.display_date?.startsWith(filterDay.padStart(2, "0")));
     if (filterCollector) filtered = filtered.filter(p => p.collector_name?.toLowerCase().includes(filterCollector.toLowerCase()));
+    
+    if (filterTaxonIds.length > 0) {
+      filtered = filtered.filter(point => {
+        if (!point.taxon_ids || point.taxon_ids.length === 0) return false;
+        return point.taxon_ids.some(taxonId => filterTaxonIds.includes(taxonId));
+      });
+    }
+    
     setFilteredPoints(filtered);
   };
 
@@ -210,15 +237,22 @@ function App() {
         <div style={{ display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
           
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#8a8d8f', padding: '5px 10px', borderRadius: '6px' }}>
-            <span style={{ color: 'black', fontSize: '12px' }}>🔍 Точки сбора:</span>
-            <input type="text" placeholder="Год" value={filterYear} onChange={(e) => setFilterYear(e.target.value)} style={{ padding: '4px', width: '60px', borderRadius: '4px', border: 'none' }} />
-            <input type="text" placeholder="Месяц" value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} style={{ padding: '4px', width: '60px', borderRadius: '4px', border: 'none' }} />
-            <input type="text" placeholder="День" value={filterDay} onChange={(e) => setFilterDay(e.target.value)} style={{ padding: '4px', width: '60px', borderRadius: '4px', border: 'none' }} />
-            <select value={filterCollector} onChange={(e) => setFilterCollector(e.target.value)} style={{ padding: '4px', borderRadius: '4px', border: 'none' }}>
-              <option value="">Все сборщики</option>
-              {persons.map(p => (<option key={p.guid} value={p.display_name}>{p.display_name}</option>))}
-            </select>
-            <button onClick={() => { setEditingPoint(null); setInitialLat(null); setInitialLng(null); setShowForm(true); }} style={{ background: '#777b79', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>➕ Новая точка</button>
+            <FilterDrawer
+              filterYear={filterYear}
+              setFilterYear={setFilterYear}
+              filterMonth={filterMonth}
+              setFilterMonth={setFilterMonth}
+              filterDay={filterDay}
+              setFilterDay={setFilterDay}
+              filterCollector={filterCollector}
+              setFilterCollector={setFilterCollector}
+              persons={persons}
+              filterTaxonIds={filterTaxonIds}
+              setFilterTaxonIds={setFilterTaxonIds}
+              taxa={taxa}
+              points={points}
+            />
+            <IconButton icon="Add" label="Новая точка" onClick={() => { setEditingPoint(null); setInitialLat(null); setInitialLng(null); setShowForm(true); }} style={{ background: "#27ae60", color: "white" }} />
           </div>
           
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#8a8d8f', padding: '5px 10px', borderRadius: '6px' }}>

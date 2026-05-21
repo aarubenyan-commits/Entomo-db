@@ -58,26 +58,55 @@ const ImportWizard = ({ onClose, onImportComplete }) => {
   };
 
   const handleValidate = async () => {
+    if (!editableRows || editableRows.length === 0) {
+      alert("Нет данных для валидации. Пожалуйста, загрузите файл.");
+      return;
+    }
+    
     setLoading(true);
     try {
       const response = await axios.post(`${API_URL}/import/validate`, { rows: editableRows });
-      setValidationResults(response.data.results);
+      if (response.data.error) {
+        alert(response.data.error);
+        return;
+      }
+      setValidationResults(response.data.results || []);
+      
+      // Подсчитываем количество ошибок и предупреждений
+      const errorCount = response.data.results.filter(r => !r.valid).length;
+      const warningCount = response.data.results.reduce((sum, r) => sum + (r.warnings?.length || 0), 0);
+      
+      if (errorCount > 0) {
+        alert(`Найдено ${errorCount} строк с ошибками. Пожалуйста, исправьте их перед импортом.`);
+      } else if (warningCount > 0) {
+        alert(`Найдено ${warningCount} предупреждений. Вы можете продолжить импорт.`);
+      } else {
+        alert("Валидация успешно завершена. Данные готовы к импорту.");
+      }
+      
       setStep(3);
     } catch (error) {
-      alert('Ошибка валидации: ' + error.message);
+      console.error("Ошибка валидации:", error);
+      alert("Ошибка валидации: " + (error.response?.data?.detail || error.message));
     } finally {
       setLoading(false);
     }
   };
 
+
   const handleConfirm = async () => {
+    if (!editableRows || editableRows.length === 0) {
+      alert('Нет данных для импорта');
+      return;
+    }
+    
     setLoading(true);
     try {
       const response = await axios.post(`${API_URL}/import/confirm`, { rows: editableRows });
       setImportResult(response.data);
       if (onImportComplete) onImportComplete();
     } catch (error) {
-      alert('Ошибка импорта: ' + error.message);
+      alert('Ошибка импорта: ' + (error.response?.data?.detail || error.message));
     } finally {
       setLoading(false);
     }
@@ -262,7 +291,9 @@ const ImportWizard = ({ onClose, onImportComplete }) => {
   useEffect(() => {
     if (step !== 2) return;
     setTimeout(() => {
-      editableRows.forEach((_, idx) => updateRowHeight(idx));
+      if (editableRows && editableRows.length > 0) {
+        editableRows.forEach((_, idx) => updateRowHeight(idx));
+      }
     }, 100);
   }, [editableRows, step]);
 
@@ -281,9 +312,12 @@ const ImportWizard = ({ onClose, onImportComplete }) => {
   }, []);
 
   const getRowStatus = (rowNum) => {
+    if (!validationResults || validationResults.length === 0) {
+      return { status: 'pending', message: 'Ожидание валидации' };
+    }
     const result = validationResults.find(r => r.row === rowNum);
     if (!result) return { status: 'pending', message: '' };
-    if (!result.valid) return { status: 'error', message: result.errors.join(', ') };
+    if (!result.valid) return { status: 'error', message: result.errors?.join(', ') || 'Ошибка' };
     if (result.warnings?.length) return { status: 'warning', message: result.warnings.join(', ') };
     return { status: 'success', message: 'Готово к импорту' };
   };
@@ -355,7 +389,7 @@ const ImportWizard = ({ onClose, onImportComplete }) => {
                     </tr>
                   </thead>
                   <tbody>
-                    {editableRows.map((row, idx) => (
+                    {editableRows && editableRows.length > 0 ? editableRows.map((row, idx) => (
                       <tr key={idx} style={{ borderBottom: '1px solid #eee', height: rowHeights[idx] || 'auto' }}>
                         <td style={{ padding: '6px', border: '1px solid #ddd', textAlign: 'center', background: '#f9f9f9', verticalAlign: 'top' }}>{idx + 1}</td>
                         {columns.map(col => (
@@ -390,13 +424,15 @@ const ImportWizard = ({ onClose, onImportComplete }) => {
                           <button onClick={() => deleteRow(idx)} style={{ background: '#dc3545', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', padding: '4px 8px', fontSize: '12px' }} title="Удалить строку">🗑️</button>
                         </td>
                       </tr>
-                    ))}
+                    )) : (
+                      <tr><td colSpan={columns.length + 2} style={{ textAlign: 'center', padding: '40px' }}>Нет данных для отображения</td></tr>
+                    )}
                   </tbody>
                 </table>
               </div>
             </div>
             <div style={{ marginTop: '10px', fontSize: '12px', color: '#666', flexShrink: 0 }}>
-              Всего записей: {editableRows.length}
+              Всего записей: {editableRows?.length || 0}
             </div>
           </>
         )}
@@ -422,31 +458,41 @@ const ImportWizard = ({ onClose, onImportComplete }) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {validationResults.map((result, idx) => {
-                    const row = editableRows[idx];
+                  {validationResults && validationResults.length > 0 ? validationResults.map((result, idx) => {
+                    const row = editableRows?.[idx];
                     const status = getRowStatus(result.row);
-                    const statusColor = status.status === 'error' ? '#f8d7da' : status.status === 'warning' ? '#fff3cd' : status.status === 'success' ? '#d4edda' : 'white';
-                    const statusText = status.status === 'error' ? 'Ошибка' : status.status === 'warning' ? 'Предупреждение' : status.status === 'success' ? 'Готово' : 'Ожидание';
+                    const statusColor = status.status === "error" ? "#f8d7da" : status.status === "warning" ? "#fff3cd" : status.status === "success" ? "#d4edda" : "white";
+                    const statusText = status.status === "error" ? "❌ Ошибка" : status.status === "warning" ? "⚠️ Предупреждение" : status.status === "success" ? "✅ Готово" : "⏳ Ожидание";
                     return (
                       <tr key={idx} style={{ backgroundColor: statusColor }}>
                         <td style={{ padding: '6px', border: '1px solid #ddd' }}>{idx + 1}</td>
                         <td style={{ padding: '6px', border: '1px solid #ddd' }}>{statusText}</td>
                         <td style={{ padding: '6px', border: '1px solid #ddd' }}>{status.message || '—'}</td>
-                        <td style={{ padding: '6px', border: '1px solid #ddd' }}>{row.display_name || (row.genus + ' ' + (row.species || ''))}</td>
-                        <td style={{ padding: '6px', border: '1px solid #ddd' }}>{row.latitude || '—'}, {row.longitude || '—'}</td>
-                        <td style={{ padding: '6px', border: '1px solid #ddd' }}>{row.source || '—'}</td>
+                        <td style={{ padding: '6px', border: '1px solid #ddd' }}>{row?.display_name || (row?.genus ? row.genus + ' ' + (row.species || '') : '—')}</td>
+                        <td style={{ padding: '6px', border: '1px solid #ddd' }}>{row?.latitude || '—'}, {row?.longitude || '—'}</td>
+                        <td style={{ padding: '6px', border: '1px solid #ddd' }}>{row?.source || '—'}</td>
                       </tr>
                     );
-                  })}
+                  }) : (
+                    <tr><td colSpan="6" style={{ textAlign: 'center', padding: '40px' }}>Нет результатов валидации</td></tr>
+                  )}
                 </tbody>
               </table>
             </div>
             {importResult && (
               <div style={{ marginTop: '10px', padding: '10px', background: '#d4edda', borderRadius: '4px', flexShrink: 0 }}>
                 <strong>✅ {importResult.message}</strong>
+                {importResult.warnings && importResult.warnings.length > 0 && (
+                  <div style={{ marginTop: '5px', color: '#856404', background: '#fff3cd', padding: '5px', borderRadius: '4px' }}>
+                    <strong>⚠️ Предупреждения:</strong>
+                    <ul style={{ margin: '5px 0 0 20px' }}>
+                      {importResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                    </ul>
+                  </div>
+                )}
                 {importResult.errors?.length > 0 && (
-                  <div style={{ marginTop: '5px', color: '#721c24', background: '#f8d7da', padding: '5px' }}>
-                    <strong>Ошибки:</strong>
+                  <div style={{ marginTop: '5px', color: '#721c24', background: '#f8d7da', padding: '5px', borderRadius: '4px' }}>
+                    <strong>❌ Ошибки:</strong>
                     <ul style={{ margin: '5px 0 0 20px' }}>
                       {importResult.errors.map((e, i) => <li key={i}>Строка {e.row}: {e.error}</li>)}
                     </ul>
