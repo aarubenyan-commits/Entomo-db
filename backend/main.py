@@ -139,6 +139,7 @@ class Link(Base):
     relation_type = Column(String, nullable=False)
     direction = Column(String, nullable=False)
     is_directed = Column(Integer, default=1)
+    sort_order = Column(Integer, default=0)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
 
@@ -362,22 +363,61 @@ def get_points():
     points = db.query(Point).all()
     result = []
     for p in points:
-        link = db.query(Link).filter(
+        # Получаем ВСЕХ сборщиков (не одного)
+        collectors = []
+        collector_links = db.query(Link).filter(
             Link.to_guid == p.guid,
             Link.from_type == "person",
             Link.relation_type == "collected_at"
-        ).first()
-        collector_name = None
-        if link:
+        ).all()
+        for link in collector_links:
             person = db.query(Person).filter(Person.guid == link.from_guid).first()
             if person:
-                collector_name = person.display_name
+                collectors.append({"guid": person.guid, "display_name": person.display_name})
         
+        # Получаем ВСЕ таксоны (виды и подвиды) с display_name
+        taxa = []
         taxon_links = db.query(Link).filter(
             Link.to_guid == p.guid,
             Link.relation_type == "has_taxon"
         ).all()
-        taxon_ids = [tl.from_guid for tl in taxon_links]
+        for link in taxon_links:
+            if link.from_type == "species":
+                species = db.query(Species).filter(Species.guid == link.from_guid).first()
+                if species:
+                    taxa.append({
+                        "guid": species.guid,
+                        "display_name": species.display_name,
+                        "type": "species"
+                    })
+            elif link.from_type == "subspecies":
+                subspecies = db.query(Subspecies).filter(Subspecies.guid == link.from_guid).first()
+                if subspecies:
+                    parent_species = db.query(Species).filter(Species.guid == subspecies.species_guid).first()
+                    if parent_species:
+                        taxa.append({
+                            "guid": subspecies.guid,
+                            "display_name": f"{parent_species.genus} {parent_species.species_name} {subspecies.subspecies_name}",
+                            "type": "subspecies"
+                        })
+        
+        # Получаем ВСЕ исследования
+        studies = []
+        study_links = db.query(Link).filter(
+            Link.from_guid == p.guid,
+            Link.relation_type == "source"
+        ).all()
+        for link in study_links:
+            study = db.query(Study).filter(Study.guid == link.to_guid).first()
+            if study:
+                studies.append({
+                    "guid": study.guid,
+                    "title": study.title or study.url,
+                    "url": study.url
+                })
+        
+        # Сохраняем taxon_ids для обратной совместимости (фильтры)
+        taxon_ids = [t["guid"] for t in taxa]
         
         result.append({
             "guid": p.guid,
@@ -388,7 +428,13 @@ def get_points():
             "location_original": p.location_original,
             "date_text": p.date_text,
             "display_date": p.date_text,
-            "collector_name": collector_name,
+            # Новые поля для карточек
+            "collectors": collectors,           # список сборщиков
+            "taxa": taxa,                       # список таксонов с display_name
+            "studies": studies,                 # список исследований
+            "studies_count": len(studies),      # количество исследований
+            # Старое поле для обратной совместимости
+            "collector_name": collectors[0]["display_name"] if collectors else None,
             "taxon_ids": taxon_ids
         })
     db.close()
@@ -560,87 +606,6 @@ def search_taxa(q: str = ""):
 @app.post("/taxa")
 def create_taxon_legacy(genus: str, species: str, display_name: Optional[str] = None):
     return create_species(genus, species, display_name)
-
-# ========== СВЯЗИ ТОЧКА-ТАКСОН ==========
-@app.get("/point_taxa/{point_guid}")
-def get_point_taxa(point_guid: str):
-    db = SessionLocal()
-    links = db.query(Link).filter(
-        Link.to_guid == point_guid,
-        Link.relation_type == "has_taxon"
-    ).all()
-    result = []
-    for link in links:
-        if link.from_type == "species":
-            taxon = db.query(Species).filter(Species.guid == link.from_guid).first()
-            if taxon:
-                result.append({
-                    "guid": taxon.guid,
-                    "genus": taxon.genus,
-                    "species": taxon.species_name,
-                    "display_name": taxon.display_name
-                })
-        elif link.from_type == "subspecies":
-            taxon = db.query(Subspecies).filter(Subspecies.guid == link.from_guid).first()
-            if taxon:
-                species = db.query(Species).filter(Species.guid == taxon.species_guid).first()
-                result.append({
-                    "guid": taxon.guid,
-                    "genus": species.genus if species else "",
-                    "species": species.species_name if species else "",
-                    "subspecies": taxon.subspecies_name,
-                    "display_name": taxon.display_name
-                })
-    db.close()
-    return result
-
-@app.post("/point_taxa/{point_guid}/{taxon_guid}")
-def add_taxon_to_point(point_guid: str, taxon_guid: str):
-    db = SessionLocal()
-    now = datetime.now().isoformat()
-    
-    taxon_type = None
-    if db.query(Species).filter(Species.guid == taxon_guid).first():
-        taxon_type = "species"
-    elif db.query(Subspecies).filter(Subspecies.guid == taxon_guid).first():
-        taxon_type = "subspecies"
-    else:
-        raise HTTPException(404, "Taxon not found")
-    
-    existing = db.query(Link).filter(
-        Link.from_guid == taxon_guid,
-        Link.to_guid == point_guid,
-        Link.relation_type == "has_taxon"
-    ).first()
-    
-    if existing:
-        db.close()
-        return {"message": "Already linked"}
-    
-    link = Link(
-        from_guid=taxon_guid, to_guid=point_guid,
-        from_type=taxon_type, to_type="point", relation_type="has_taxon",
-        direction="many_to_many", is_directed=1,
-        created_at=now, updated_at=now
-    )
-    db.add(link)
-    db.commit()
-    db.close()
-    return {"message": "Linked"}
-
-@app.delete("/point_taxa/{point_guid}/{taxon_guid}")
-def remove_taxon_from_point(point_guid: str, taxon_guid: str):
-    db = SessionLocal()
-    link = db.query(Link).filter(
-        Link.from_guid == taxon_guid,
-        Link.to_guid == point_guid,
-        Link.relation_type == "has_taxon"
-    ).first()
-    if link:
-        db.delete(link)
-        db.commit()
-    db.close()
-    return {"message": "Unlinked"}
 
 # ========== СВЯЗИ С ИСТОЧНИКАМИ ==========
 @app.post("/source/{from_type}/{from_guid}/{study_guid}")
@@ -1463,7 +1428,148 @@ async def confirm_import(data: dict):
         "errors": stats["errors"]
     }
 
+# ========== СВЯЗИ ТОЧКА-ТАКСОН ==========
+@app.get("/point_taxa/{point_guid}")
+def get_point_taxa(point_guid: str):
+    db = SessionLocal()
+    links = db.query(Link).filter(
+        Link.to_guid == point_guid,
+        Link.relation_type == "has_taxon"
+    ).order_by(Link.sort_order.asc()).all()
+    result = []
+    for link in links:
+        if link.from_type == "species":
+            taxon = db.query(Species).filter(Species.guid == link.from_guid).first()
+            if taxon:
+                result.append({
+                    "guid": taxon.guid,
+                    "genus": taxon.genus,
+                    "species": taxon.species_name,
+                    "display_name": taxon.display_name
+                })
+        elif link.from_type == "subspecies":
+            taxon = db.query(Subspecies).filter(Subspecies.guid == link.from_guid).first()
+            if taxon:
+                species = db.query(Species).filter(Species.guid == taxon.species_guid).first()
+                result.append({
+                    "guid": taxon.guid,
+                    "genus": species.genus if species else "",
+                    "species": species.species_name if species else "",
+                    "subspecies": taxon.subspecies_name,
+                    "display_name": taxon.display_name
+                })
+    db.close()
+    return result
+
+@app.post("/point_taxa/{point_guid}/{taxon_guid}")
+def add_taxon_to_point(point_guid: str, taxon_guid: str, sort_order: int = 0):
+    db = SessionLocal()
+    now = datetime.now().isoformat()
+    
+    taxon_type = None
+    if db.query(Species).filter(Species.guid == taxon_guid).first():
+        taxon_type = "species"
+    elif db.query(Subspecies).filter(Subspecies.guid == taxon_guid).first():
+        taxon_type = "subspecies"
+    else:
+        raise HTTPException(404, "Taxon not found")
+    
+    existing = db.query(Link).filter(
+        Link.from_guid == taxon_guid,
+        Link.to_guid == point_guid,
+        Link.relation_type == "has_taxon"
+    ).first()
+    
+    if existing:
+        existing.sort_order = sort_order
+        existing.updated_at = now
+        db.commit()
+        return {"message": "Order updated", "link_guid": existing.link_guid}
+    
+    link = Link(
+        from_guid=taxon_guid, to_guid=point_guid,
+        from_type=taxon_type, to_type="point", relation_type="has_taxon",
+        direction="many_to_many", is_directed=1,
+        sort_order=sort_order,
+        created_at=now, updated_at=now
+    )
+    db.add(link)
+    db.commit()
+    link_guid = link.link_guid
+    db.close()
+    return {"link_guid": link_guid, "message": "Linked"}
+
+@app.put("/point_taxa/{point_guid}/{taxon_guid}")
+def update_taxon_order(point_guid: str, taxon_guid: str, sort_order: int = 0):
+    db = SessionLocal()
+    try:
+        link = db.query(Link).filter(
+            Link.from_guid == taxon_guid,
+            Link.to_guid == point_guid,
+            Link.relation_type == "has_taxon"
+        ).first()
+        
+        if not link:
+            raise HTTPException(404, "Link not found")
+        
+        link.updated_at = datetime.now().isoformat()
+        db.commit()
+        return {"message": "Order updated", "sort_order": sort_order}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Error: {str(e)}")
+    finally:
+        db.close()
+
+@app.delete("/point_taxa/{point_guid}/{taxon_guid}")
+def remove_taxon_from_point(point_guid: str, taxon_guid: str):
+    db = SessionLocal()
+    try:
+        link = db.query(Link).filter(
+            Link.from_guid == taxon_guid,
+            Link.to_guid == point_guid,
+            Link.relation_type == "has_taxon"
+        ).first()
+        
+        if not link:
+            raise HTTPException(404, "Link not found")
+        
+        db.delete(link)
+        db.commit()
+        return {"message": "Unlinked", "link_guid": link.link_guid}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Error: {str(e)}")
+    finally:
+        db.close()
+
+# ========== МАССОВОЕ ОБНОВЛЕНИЕ ПОРЯДКА ТАКСОНОВ ==========
+@app.post("/point_taxa/{point_guid}/reorder")
+def reorder_taxa(point_guid: str, taxon_guids: List[str]):
+    """Обновляет порядок всех таксонов в точке"""
+    db = SessionLocal()
+    try:
+        for idx, taxon_guid in enumerate(taxon_guids):
+            link = db.query(Link).filter(
+                Link.from_guid == taxon_guid,
+                Link.to_guid == point_guid,
+                Link.relation_type == "has_taxon"
+            ).first()
+            if link:
+                link.sort_order = idx
+                link.updated_at = datetime.now().isoformat()
+        db.commit()
+        return {"message": "Order updated", "count": len(taxon_guids)}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Error: {str(e)}")
+    finally:
+        db.close()
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
-

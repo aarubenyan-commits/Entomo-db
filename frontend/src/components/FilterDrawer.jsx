@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { IconButton } from './IconLibrary';
 import axios from 'axios';
 
 const API_URL = 'http://127.0.0.1:8000';
@@ -80,7 +79,6 @@ const FilterDrawer = ({
 
   const hasActiveFilters = filterYear || filterMonth || filterDay || filterCollector || selectedTaxa.length > 0;
 
-  // Группировка видов по родам
   const speciesByGenus = {};
   for (const s of allSpecies) {
     if (!speciesByGenus[s.genus]) speciesByGenus[s.genus] = [];
@@ -99,35 +97,16 @@ const FilterDrawer = ({
             alignItems: 'center',
             gap: '6px',
             padding: '4px 12px',
-            background: hasActiveFilters ? '#2ecc71' : '#777b79',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
+            background: hasActiveFilters ? '#2ecc71' : '#e9ecef',
+            color: hasActiveFilters ? 'white' : '#333',
+            border: '1px solid #dee2e6',
+            borderRadius: '6px',
             cursor: 'pointer',
-            fontSize: '12px'
+            fontSize: '11px'
           }}
         >
-          ⚙️ Фильтры
+          Фильтры
         </button>
-        {hasActiveFilters && (
-          <span style={{
-            position: 'absolute',
-            top: '-5px',
-            right: '-5px',
-            background: '#e74c3c',
-            color: 'white',
-            borderRadius: '50%',
-            width: '16px',
-            height: '16px',
-            fontSize: '10px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1001
-          }}>
-            !
-          </span>
-        )}
       </div>
 
       {isOpen && createPortal(
@@ -149,13 +128,12 @@ const FilterDrawer = ({
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-            <h4 style={{ margin: 0 }}>🔍 Фильтры</h4>
+            <h4 style={{ margin: 0, fontSize: '13px' }}>Фильтры</h4>
             <button onClick={() => setIsOpen(false)} style={{ background: 'none', border: 'none', fontSize: '18px', cursor: 'pointer' }}>✖️</button>
           </div>
 
-          {/* Фильтры по дате */}
           <div style={{ marginBottom: '15px' }}>
-            <div style={{ fontWeight: 'bold', marginBottom: '8px', fontSize: '13px' }}>📅 Дата сбора:</div>
+            <div style={{ fontWeight: 'bold', marginBottom: '8px', fontSize: '12px' }}>Дата сбора</div>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <input type="text" placeholder="Год" value={filterYear} onChange={(e) => setFilterYear(e.target.value)} style={{ padding: '5px 8px', width: '60px', borderRadius: '4px', border: '1px solid #ccc', fontSize: '12px' }} />
               <input type="text" placeholder="Месяц" value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} style={{ padding: '5px 8px', width: '60px', borderRadius: '4px', border: '1px solid #ccc', fontSize: '12px' }} />
@@ -163,9 +141,8 @@ const FilterDrawer = ({
             </div>
           </div>
           
-          {/* Фильтр по сборщику */}
           <div style={{ marginBottom: '15px' }}>
-            <div style={{ fontWeight: 'bold', marginBottom: '8px', fontSize: '13px' }}>👤 Сборщик:</div>
+            <div style={{ fontWeight: 'bold', marginBottom: '8px', fontSize: '12px' }}>Сборщик</div>
             <select 
               value={filterCollector} 
               onChange={(e) => setFilterCollector(e.target.value)}
@@ -178,9 +155,8 @@ const FilterDrawer = ({
             </select>
           </div>
           
-          {/* Фильтр по таксонам - дерево */}
           <div style={{ marginBottom: '15px' }}>
-            <div style={{ fontWeight: 'bold', marginBottom: '8px', fontSize: '13px' }}>🔬 Таксоны:</div>
+            <div style={{ fontWeight: 'bold', marginBottom: '8px', fontSize: '12px' }}>Таксоны</div>
             <div style={{ maxHeight: '300px', overflow: 'auto', border: '1px solid #eee', borderRadius: '4px', padding: '8px' }}>
               {Object.keys(speciesByGenus).length === 0 ? (
                 <div style={{ textAlign: 'center', color: '#999', padding: '20px' }}>Загрузка...</div>
@@ -248,13 +224,12 @@ const FilterDrawer = ({
             </div>
           </div>
           
-          {/* Кнопки управления */}
           <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '15px', paddingTop: '10px', borderTop: '1px solid #eee' }}>
-            <button onClick={clearAllFilters} style={{ padding: '6px 12px', background: '#95a5a6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
-              🔄 Сбросить все
+            <button onClick={clearAllFilters} style={{ padding: '6px 12px', background: '#e9ecef', border: '1px solid #dee2e6', borderRadius: '6px', cursor: 'pointer', fontSize: '11px' }}>
+              Сбросить все
             </button>
-            <button onClick={() => setIsOpen(false)} style={{ padding: '6px 12px', background: '#27ae60', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
-              ✓ Применить
+            <button onClick={() => setIsOpen(false)} style={{ padding: '6px 12px', background: '#3498db', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '11px' }}>
+              Применить
             </button>
           </div>
         </div>,

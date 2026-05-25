@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { LoadScript } from '@react-google-maps/api';
 import { jsPDF } from 'jspdf';
 import QRCode from 'qrcode';
-import PointForm from './components/PointForm';
 import CollectorManager from './components/CollectorManager';
 import StudyManager from './components/StudyManager';
 import TaxonManager from './components/TaxonManager';
@@ -11,12 +10,13 @@ import ImportWizard from './components/ImportWizard';
 import BulkEditModal from './components/BulkEditModal';
 import ExportModal from './components/ExportModal';
 import MapView from './components/MapView';
-import { IconButton, Icons } from './components/IconLibrary';
 import FilterDrawer from './components/FilterDrawer';
 import GraphView from './components/GraphView';
+import ExpandablePointCard from './components/ExpandablePointCard';
 
 const API_URL = 'http://127.0.0.1:8000';
 const MAPS_API_KEY = 'AIzaSyBt-bcHW2_VAjETvUFvfaPPLVhhe9Iqr7E';
+const POINTS_PER_PAGE = 20;
 
 const qrCache = new Map();
 
@@ -32,6 +32,41 @@ async function generateQRDataUrl(url, size = 150) {
   }
 }
 
+// Функция для парсинга даты из формата "20.IV.2022" или "20.04.2022"
+function parseDate(dateStr) {
+  if (!dateStr) return 0;
+  
+  // Формат "20.IV.2022"
+  const monthMap = {
+    'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5, 'VI': 6,
+    'VII': 7, 'VIII': 8, 'IX': 9, 'X': 10, 'XI': 11, 'XII': 12
+  };
+  
+  // Проверяем на римские месяцы
+  for (const [roman, num] of Object.entries(monthMap)) {
+    if (dateStr.includes(roman)) {
+      const match = dateStr.match(/(\d+)\./);
+      const day = match ? parseInt(match[1]) : 1;
+      const yearMatch = dateStr.match(/\.(\d{4})/);
+      const year = yearMatch ? parseInt(yearMatch[1]) : 2000;
+      return new Date(year, num - 1, day).getTime();
+    }
+  }
+  
+  // Формат "20.04.2022"
+  const parts = dateStr.split('.');
+  if (parts.length === 3) {
+    const day = parseInt(parts[0]);
+    const month = parseInt(parts[1]) - 1;
+    const year = parseInt(parts[2]);
+    if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+      return new Date(year, month, day).getTime();
+    }
+  }
+  
+  return 0;
+}
+
 function App() {
   const [points, setPoints] = useState([]);
   const [filteredPoints, setFilteredPoints] = useState([]);
@@ -41,13 +76,14 @@ function App() {
   const [filterMonth, setFilterMonth] = useState('');
   const [filterDay, setFilterDay] = useState('');
   const [filterCollector, setFilterCollector] = useState('');
-  const [filterGenus, setFilterGenus] = useState("");
-  const [filterSpecies, setFilterSpecies] = useState("");
   const [filterTaxonIds, setFilterTaxonIds] = useState([]);
   const [taxa, setTaxa] = useState([]);
+  const [selectedPoints, setSelectedPoints] = useState(new Set());
+  const [highlightedPoint, setHighlightedPoint] = useState(null);
+  const [newPointMode, setNewPointMode] = useState(false);
+  const [newPointCoords, setNewPointCoords] = useState({ lat: null, lng: null });
+  const [autoFocusNewPoint, setAutoFocusNewPoint] = useState(false);
 
-  const [highlightedRows, setHighlightedRows] = useState(new Set());
-  const [showForm, setShowForm] = useState(false);
   const [showCollectorManager, setShowCollectorManager] = useState(false);
   const [showStudyManager, setShowStudyManager] = useState(false);
   const [showTaxonManagerGlobal, setShowTaxonManagerGlobal] = useState(false);
@@ -55,14 +91,24 @@ function App() {
   const [showExportModal, setShowExportModal] = useState(false);
   const [showBulkEditModal, setShowBulkEditModal] = useState(false);
   const [selectedForBulk, setSelectedForBulk] = useState([]);
-  const [editingPoint, setEditingPoint] = useState(null);
-  const [initialLat, setInitialLat] = useState(null);
-  const [initialLng, setInitialLng] = useState(null);
   const [viewMode, setViewMode] = useState('map');
-  const tableBodyRef = useRef(null);
+  
+  const [currentPage, setCurrentPage] = useState(1);
+  
+  const hasActiveFilters = filterYear || filterMonth || filterDay || filterCollector || filterTaxonIds.length > 0;
+  const usePagination = !hasActiveFilters && filteredPoints.length > POINTS_PER_PAGE;
+  const totalPages = usePagination ? Math.ceil(filteredPoints.length / POINTS_PER_PAGE) : 1;
+  
+  const paginatedPoints = usePagination && !newPointMode
+    ? filteredPoints.slice((currentPage - 1) * POINTS_PER_PAGE, currentPage * POINTS_PER_PAGE)
+    : filteredPoints;
 
   useEffect(() => { fetchData(); }, []);
-  useEffect(() => { applyFilters(); }, [points, filterYear, filterMonth, filterDay, filterCollector, filterTaxonIds]);
+  useEffect(() => { 
+    applyFilters();
+    setCurrentPage(1);
+    setHighlightedPoint(null);
+  }, [points, filterYear, filterMonth, filterDay, filterCollector, filterTaxonIds]);
 
   const fetchData = async () => {
     try {
@@ -72,17 +118,14 @@ function App() {
       setTaxa(taxaRes.data);
       setPersons(personsRes.data);
       
-      const pointsWithTaxa = await Promise.all(
-        pointsRes.data.map(async (point) => {
-          try {
-            const taxaResPoint = await axios.get(`${API_URL}/point_taxa/${point.guid}`);
-            return { ...point, taxon_ids: taxaResPoint.data.map(t => t.guid) };
-          } catch (e) {
-            return { ...point, taxon_ids: [] };
-          }
-        })
-      );
-      setPoints(pointsWithTaxa);
+      // Сортировка от новых к старым с парсингом дат
+      const sorted = pointsRes.data.sort((a, b) => {
+        const dateA = parseDate(a.display_date);
+        const dateB = parseDate(b.display_date);
+        return dateB - dateA;
+      });
+      
+      setPoints(sorted);
     } catch (error) { console.error(error); }
   };
 
@@ -91,7 +134,11 @@ function App() {
     if (filterYear) filtered = filtered.filter(p => p.display_date?.includes(filterYear));
     if (filterMonth) filtered = filtered.filter(p => p.display_date?.match(`\\.${filterMonth}\\.`));
     if (filterDay) filtered = filtered.filter(p => p.display_date?.startsWith(filterDay.padStart(2, "0")));
-    if (filterCollector) filtered = filtered.filter(p => p.collector_name?.toLowerCase().includes(filterCollector.toLowerCase()));
+    if (filterCollector) {
+      filtered = filtered.filter(p => 
+        p.collectors?.some(c => c.display_name.toLowerCase().includes(filterCollector.toLowerCase()))
+      );
+    }
     
     if (filterTaxonIds.length > 0) {
       filtered = filtered.filter(point => {
@@ -117,46 +164,87 @@ function App() {
   const resetQuantities = () => setSelectedQuantities({});
   const selectAll = () => {
     const newQuantities = {};
-    filteredPoints.forEach(p => { newQuantities[p.guid] = 1; });
+    const pointsToSelect = newPointMode ? paginatedPoints : paginatedPoints;
+    pointsToSelect.forEach(p => { newQuantities[p.guid] = 1; });
     setSelectedQuantities(newQuantities);
   };
 
   const getTotalLabels = () => Object.values(selectedQuantities).reduce((sum, q) => sum + q, 0);
 
-  const scrollToRow = (guid) => {
-    if (tableBodyRef.current) {
-      const row = tableBodyRef.current.querySelector(`[data-row-guid="${guid}"]`);
-      if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  };
-
-  const handleRowClick = (guid, lat, lng, event) => {
-    const newHighlighted = new Set(highlightedRows);
-    if (event.ctrlKey || event.metaKey) {
-      if (newHighlighted.has(guid)) newHighlighted.delete(guid);
-      else newHighlighted.add(guid);
-    } else if (event.shiftKey) {
-      alert("Для массового редактирования используйте Ctrl+Click для выделения нескольких строк, затем нажмите кнопку \"Массовое редактирование\"");
-      return;
+  const handleSelectPoint = (guid, isSelected) => {
+    const newSelected = new Set(selectedPoints);
+    if (isSelected) {
+      newSelected.add(guid);
     } else {
-      newHighlighted.clear();
-      newHighlighted.add(guid);
+      newSelected.delete(guid);
     }
-    setHighlightedRows(newHighlighted);
-    setSelectedForBulk(Array.from(newHighlighted));
+    setSelectedPoints(newSelected);
+    setSelectedForBulk(Array.from(newSelected));
   };
 
-  const handleMarkerClick = (guid, lat, lng) => {
-    setHighlightedRows(new Set([guid]));
-    scrollToRow(guid);
+  const handleSelectAllVisible = () => {
+    const visiblePoints = newPointMode ? paginatedPoints : paginatedPoints;
+    if (selectedPoints.size === visiblePoints.length && visiblePoints.length > 0) {
+      setSelectedPoints(new Set());
+      setSelectedForBulk([]);
+    } else {
+      const allGuids = visiblePoints.map(p => p.guid);
+      setSelectedPoints(new Set(allGuids));
+      setSelectedForBulk(allGuids);
+    }
   };
 
-  const handleDeletePoint = async (guid, event) => {
-    event.stopPropagation();
+  const handleClearAllSelections = () => {
+    setSelectedPoints(new Set());
+    setSelectedForBulk([]);
+    setSelectedQuantities({});
+  };
+
+  const handleMarkerClick = (guid) => {
+    const index = filteredPoints.findIndex(p => p.guid === guid);
+    if (index === -1) return;
+    
+    if (usePagination && !newPointMode) {
+      const targetPage = Math.floor(index / POINTS_PER_PAGE) + 1;
+      if (targetPage !== currentPage) {
+        setCurrentPage(targetPage);
+        setTimeout(() => {
+          setHighlightedPoint(guid);
+          const element = document.getElementById(`point-card-${guid}`);
+          if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 200);
+      } else {
+        setHighlightedPoint(guid);
+        const element = document.getElementById(`point-card-${guid}`);
+        if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    } else {
+      setHighlightedPoint(guid);
+      const element = document.getElementById(`point-card-${guid}`);
+      if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
+
+  const handleHighlightPoint = (guid) => {
+    setHighlightedPoint(guid);
+    const point = filteredPoints.find(p => p.guid === guid);
+    if (point && point.latitude && point.longitude && window.mapRef) {
+      window.mapRef.setView([point.latitude, point.longitude], 14);
+    }
+  };
+
+  const handleDeletePoint = async (guid) => {
     if (window.confirm('Удалить эту точку?')) {
       try {
         await axios.delete(`${API_URL}/points/${guid}`);
         fetchData();
+        if (highlightedPoint === guid) setHighlightedPoint(null);
+        if (selectedPoints.has(guid)) {
+          const newSelected = new Set(selectedPoints);
+          newSelected.delete(guid);
+          setSelectedPoints(newSelected);
+          setSelectedForBulk(Array.from(newSelected));
+        }
       } catch (error) {
         alert('Ошибка удаления');
       }
@@ -207,7 +295,8 @@ function App() {
           const qrSize = 5;
           pdf.addImage(qrDataUrl, 'PNG', x + labelW - qrSize - 0.4, y + labelH - qrSize - 0.4, qrSize, qrSize);
         }
-        if (point.collector_name) { pdf.text(point.collector_name, textX, y + labelH - 0.6); }
+        const collectorNames = point.collectors?.map(c => c.display_name).join(', ');
+        if (collectorNames) { pdf.text(collectorNames, textX, y + labelH - 0.6); }
         currentCol++;
         if (currentCol >= cols) { currentCol = 0; currentRow++; }
       }
@@ -216,133 +305,206 @@ function App() {
     alert('PDF готов!');
   };
 
-  const handleFormSave = (success) => {
-    if (success) fetchData();
-    setShowForm(false);
-    setEditingPoint(null);
-    setInitialLat(null);
-    setInitialLng(null);
+  const handleNewPoint = (lat = null, lng = null) => {
+    setNewPointMode(true);
+    setNewPointCoords({ lat, lng });
+    setAutoFocusNewPoint(true);
+    setCurrentPage(1);
+    document.body.style.overflow = 'hidden';
+  };
+
+  const handleCancelNewPoint = () => {
+    setNewPointMode(false);
+    setNewPointCoords({ lat: null, lng: null });
+    setAutoFocusNewPoint(false);
+    document.body.style.overflow = '';
+  };
+
+  const handleNewPointSave = (success) => {
+    if (success) {
+      fetchData();
+      setNewPointMode(false);
+      setNewPointCoords({ lat: null, lng: null });
+      setCurrentPage(1);
+    } else {
+      setNewPointMode(false);
+      setNewPointCoords({ lat: null, lng: null });
+    }
+    setAutoFocusNewPoint(false);
+    document.body.style.overflow = '';
   };
 
   const onMapClick = (lat, lng) => {
-    setEditingPoint(null);
-    setInitialLat(lat);
-    setInitialLng(lng);
-    setShowForm(true);
+    handleNewPoint(lat, lng);
   };
 
+  const newPointObject = newPointMode ? {
+    guid: 'new',
+    location_original: '',
+    display_date: '',
+    latitude: newPointCoords.lat,
+    longitude: newPointCoords.lng,
+    latitude_dms: newPointCoords.lat ? decimalToDms(newPointCoords.lat, true) : null,
+    longitude_dms: newPointCoords.lng ? decimalToDms(newPointCoords.lng, false) : null,
+    collectors: [],
+    taxa: [],
+    studies: [],
+    studies_count: 0,
+    taxon_ids: []
+  } : null;
+
+  function decimalToDms(decimal, isLat) {
+    if (decimal === undefined || decimal === null) return '';
+    const dec = parseFloat(decimal);
+    const degrees = Math.floor(Math.abs(dec));
+    const minutesFull = (Math.abs(dec) - degrees) * 60;
+    const minutes = Math.floor(minutesFull);
+    const seconds = (minutesFull - minutes) * 60;
+    const direction = isLat ? (dec >= 0 ? 'N' : 'S') : (dec >= 0 ? 'E' : 'W');
+    return `${degrees}°${minutes.toString().padStart(2, '0')}'${seconds.toFixed(1)}"${direction}`;
+  }
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', margin: 0, padding: 0, overflow: 'hidden' }}>
-      <div style={{ padding: '10px', background: '#84b6e9', flexShrink: 0 }}>
-        <div style={{ display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
-          
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#8a8d8f', padding: '5px 10px', borderRadius: '6px' }}>
-            <FilterDrawer
-              filterYear={filterYear}
-              setFilterYear={setFilterYear}
-              filterMonth={filterMonth}
-              setFilterMonth={setFilterMonth}
-              filterDay={filterDay}
-              setFilterDay={setFilterDay}
-              filterCollector={filterCollector}
-              setFilterCollector={setFilterCollector}
-              persons={persons}
-              filterTaxonIds={filterTaxonIds}
-              setFilterTaxonIds={setFilterTaxonIds}
-              taxa={taxa}
-              points={points}
-            />
-            <IconButton icon="Add" label="Новая точка" onClick={() => { setEditingPoint(null); setInitialLat(null); setInitialLng(null); setShowForm(true); }} style={{ background: "#27ae60", color: "white" }} />
+    <div style={{ height: '100vh', width: '100vw', overflow: 'hidden', position: 'relative' }}>
+      {/* Основной контент - затемняется оверлеем */}
+      <div style={{ 
+        height: '100%', 
+        width: '100%', 
+        display: 'flex', 
+        flexDirection: 'column',
+        opacity: newPointMode ? 0.7 : 1,
+        pointerEvents: newPointMode ? 'none' : 'auto',
+        transition: 'opacity 0.2s ease'
+      }}>
+        <div style={{ padding: '6px 12px', background: '#84b6e9', flexShrink: 0, display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', background: '#6b9ec7', padding: '3px 8px', borderRadius: '6px' }}>
+              <span style={{ color: 'white', fontSize: '11px' }}>⚙️</span>
+              <button onClick={() => setShowCollectorManager(true)} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>Сборщики</button>
+              <button onClick={() => setShowTaxonManagerGlobal(true)} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>Таксоны</button>
+              <button onClick={() => setShowStudyManager(true)} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>Исследования</button>
+              <button onClick={() => setViewMode(viewMode === 'map' ? 'graph' : 'map')} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>
+                {viewMode === 'map' ? '📊 Граф' : '🗺️ Карта'}
+              </button>
+              <button onClick={() => setShowImportWizard(true)} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>📥 Импорт</button>
+              <button onClick={() => setShowExportModal(true)} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>📤 Экспорт</button>
+                            <button onClick={() => setShowBulkEditModal(true)} disabled={selectedForBulk.length === 0} style={{ background: selectedForBulk.length === 0 ? '#6b9ec7' : '#e67e22', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: selectedForBulk.length === 0 ? 'not-allowed' : 'pointer', fontSize: '11px', opacity: selectedForBulk.length === 0 ? 0.5 : 1 }}>
+                Массовое {selectedForBulk.length > 0 ? `(${selectedForBulk.length})` : ''}
+              </button>
+            </div>
+            
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', background: '#6b9ec7', padding: '3px 8px', borderRadius: '6px' }}>
+              <span style={{ color: 'white', fontSize: '11px' }}>🏷️</span>
+              <button onClick={selectAll} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>Выбрать всё</button>
+              <button onClick={resetQuantities} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>Сброс кол-ва</button>
+              <button onClick={printLabels} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>🖨️ Печать ({getTotalLabels()})</button>
+            </div>
           </div>
           
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#8a8d8f', padding: '5px 10px', borderRadius: '6px' }}>
-            <span style={{ color: 'black', fontSize: '12px' }}>📍 Печать этикеток:</span>
-            <button onClick={selectAll} style={{ background: '#3498db', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>✓ Выбрать всё</button>
-            <button onClick={resetQuantities} style={{ background: '#e67e22', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>⟳ Сбросить</button>
-            <button onClick={printLabels} style={{ background: '#27ae60', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>🖨️ Печать ({getTotalLabels()})</button>
-          </div>
-          
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', background: '#8a8d8f', padding: '5px 10px', borderRadius: '6px' }}>
-            <span style={{ color: 'black', fontSize: '12px' }}>⚙️ Администрирование:</span>
-            <button onClick={() => setShowCollectorManager(true)} style={{ background: '#f39c12', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>👥 Сборщики</button>
-            <button onClick={() => setShowTaxonManagerGlobal(true)} style={{ background: '#3498db', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>🔬 Таксоны</button>
-            <IconButton icon="Study" label="Исследования" onClick={() => setShowStudyManager(true)} style={{ background: "#e67e22", color: "white" }} />
-            <button onClick={() => setViewMode(viewMode === 'map' ? 'graph' : 'map')} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>
-              {viewMode === 'map' ? '📊 Переключить на граф' : '🗺️ Переключить на карту'}
-            </button>
-            <button onClick={() => setShowImportWizard(true)} style={{ background: '#1abc9c', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>📥 Импорт данных</button>
-            <IconButton icon="Edit" label={`Массовое редактирование${selectedForBulk.length > 0 ? ` (${selectedForBulk.length})` : ""}`} onClick={() => setShowBulkEditModal(true)} disabled={selectedForBulk.length === 0} style={{ background: "#e67e22", color: "white" }} />
-            <button onClick={() => setShowExportModal(true)} style={{ background: '#1abc9c', color: 'white', border: 'none', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer' }}>📤 Экспорт данных</button>
-          </div>
-          
-          <div style={{ color: 'white', marginLeft: 'auto', fontSize: '14px', fontWeight: 'bold' }}>
-            📊 Точек: {filteredPoints.length}
+          <div style={{ color: 'white', fontSize: '12px', fontWeight: 'bold' }}>
+            {filteredPoints.length} точек
+            {usePagination && !newPointMode && ` • стр. ${currentPage} из ${totalPages}`}
+            {hasActiveFilters && <span style={{ fontSize: '10px', marginLeft: '8px' }}>(фильтр)</span>}
           </div>
         </div>
-      </div>
 
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {viewMode === 'map' && (
-          <div style={{ width: '40%', overflow: 'auto', backgroundColor: 'white', borderRight: '1px solid #ddd' }}>
-            <div ref={tableBodyRef} style={{ overflow: 'auto', height: '100%' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                <thead style={{ backgroundColor: '#ecf0f1', position: 'sticky', top: 0 }}>
-                  <tr>
-                    <th style={{ padding: '8px' }}>Место</th>
-                    <th style={{ padding: '8px' }}>Дата</th>
-                    <th style={{ padding: '8px' }}>Сборщик</th>
-                    <th style={{ padding: '8px', width: '60px' }}>Кол-во</th>
-                    <th style={{ padding: '8px', width: '70px' }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPoints.map(p => (
-                    <tr key={p.guid} data-row-guid={p.guid} onClick={(e) => handleRowClick(p.guid, p.latitude, p.longitude, e)} style={{ backgroundColor: highlightedRows.has(p.guid) ? '#d0e8ff' : 'transparent', cursor: 'pointer' }}>
-                      <td style={{ padding: '8px' }}>{p.location_original?.substring(0, 50) || '—'}</td>
-                      <td style={{ padding: '8px' }}>{p.display_date || '—'}</td>
-                      <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>{p.collector_name || '—'}</td>
-                      <td style={{ padding: '8px' }}>
-                        <input type="number" min="0" max="999" value={selectedQuantities[p.guid] || ''} onChange={(e) => updateQuantity(p.guid, e.target.value)} style={{ width: '50px', padding: '4px' }} onClick={(e) => e.stopPropagation()} />
-                      </td>
-                      <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
-                        <button onClick={(e) => { e.stopPropagation(); setEditingPoint(p); setShowForm(true); }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', marginRight: '8px' }}>✏️</button>
-                        <button onClick={(e) => handleDeletePoint(p.guid, e)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#e74c3c' }}>🗑️</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-        
-        <div style={{ width: viewMode === 'map' ? '60%' : '100%', height: '100%', position: 'relative' }}>
-          <LoadScript googleMapsApiKey={MAPS_API_KEY} loadingElement={<div>Загрузка карт...</div>}>
-            <div style={{ height: '100%', width: '100%' }}>
-              {viewMode === 'map' ? (
-                <MapView
-                  points={filteredPoints}
-                  onMapClick={onMapClick}
-                  highlightedRows={highlightedRows}
-                  onMarkerClick={handleMarkerClick}
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', margin: 0, padding: 0 }}>
+          {viewMode === 'map' && (
+            <div style={{ width: '30%', overflow: 'auto', backgroundColor: '#fff', margin: 0, padding: 0, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ padding: '8px 10px', background: '#f8f9fa', borderBottom: '1px solid #e2e6ea', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button onClick={handleSelectAllVisible} style={{ padding: '4px 12px', fontSize: '11px', background: '#e9ecef', border: '1px solid #dee2e6', borderRadius: '6px', cursor: 'pointer' }}>☐ Выбрать все</button>
+                <button onClick={handleClearAllSelections} style={{ padding: '4px 12px', fontSize: '11px', background: '#e9ecef', border: '1px solid #dee2e6', borderRadius: '6px', cursor: 'pointer' }}>✕ Сбросить всё</button>
+                <FilterDrawer
+                  filterYear={filterYear}
+                  setFilterYear={setFilterYear}
+                  filterMonth={filterMonth}
+                  setFilterMonth={setFilterMonth}
+                  filterDay={filterDay}
+                  setFilterDay={setFilterDay}
+                  filterCollector={filterCollector}
+                  setFilterCollector={setFilterCollector}
+                  persons={persons}
+                  filterTaxonIds={filterTaxonIds}
+                  setFilterTaxonIds={setFilterTaxonIds}
+                  taxa={taxa}
+                  points={points}
                 />
-              ) : (
-                <GraphView onUpdate={fetchData} refreshTrigger={points} />
+                <button onClick={() => handleNewPoint()} style={{ padding: '4px 12px', fontSize: '11px', background: '#3498db', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>+ Новая точка</button>
+                {usePagination && !newPointMode && <div style={{ marginLeft: 'auto', fontSize: '10px', color: '#7f8c8d' }}>стр. {currentPage} из {totalPages}</div>}
+              </div>
+              
+              <div style={{ flex: 1, overflow: 'auto', padding: '6px' }}>
+                {paginatedPoints.map(point => (
+                  <div key={point.guid} id={`point-card-${point.guid}`}>
+                    <ExpandablePointCard
+                      point={point}
+                      isSelected={selectedPoints.has(point.guid)}
+                      isHighlighted={highlightedPoint === point.guid}
+                      onSelect={handleSelectPoint}
+                      onHighlight={handleHighlightPoint}
+                      onUpdate={fetchData}
+                    />
+                  </div>
+                ))}
+              </div>
+              
+              {usePagination && !newPointMode && totalPages > 1 && (
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', padding: '8px', borderTop: '1px solid #e2e6ea', background: '#f8f9fa' }}>
+                  <button onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))} disabled={currentPage === 1} style={{ padding: '4px 10px', fontSize: '11px', background: '#e9ecef', border: '1px solid #dee2e6', borderRadius: '6px', cursor: currentPage === 1 ? 'not-allowed' : 'pointer', opacity: currentPage === 1 ? 0.5 : 1 }}>← Назад</button>
+                  <span style={{ padding: '4px 10px', fontSize: '11px' }}>{currentPage} / {totalPages}</span>
+                  <button onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))} disabled={currentPage === totalPages} style={{ padding: '4px 10px', fontSize: '11px', background: '#e9ecef', border: '1px solid #dee2e6', borderRadius: '6px', cursor: currentPage === totalPages ? 'not-allowed' : 'pointer', opacity: currentPage === totalPages ? 0.5 : 1 }}>Вперёд →</button>
+                </div>
               )}
             </div>
-          </LoadScript>
+          )}
+          
+          <div style={{ width: viewMode === 'map' ? '70%' : '100%', height: '100%', position: 'relative' }}>
+            <LoadScript googleMapsApiKey={MAPS_API_KEY} loadingElement={<div>Загрузка карт...</div>}>
+              <div style={{ height: '100%', width: '100%' }}>
+                {viewMode === 'map' ? (
+                  <MapView
+                    points={filteredPoints}
+                    onMapClick={onMapClick}
+                    highlightedPoint={highlightedPoint}
+                    onMarkerClick={handleMarkerClick}
+                  />
+                ) : (
+                  <GraphView onUpdate={fetchData} refreshTrigger={points} />
+                )}
+              </div>
+            </LoadScript>
+          </div>
         </div>
       </div>
       
-      {showForm && (
-        <PointForm
-          point={editingPoint}
-          initialLat={initialLat}
-          initialLng={initialLng}
-          onClose={() => handleFormSave(false)}
-          onSave={handleFormSave}
-        />
+      {/* Форма новой точки - поверх затемнённого фона */}
+      {newPointMode && newPointObject && (
+        <div style={{
+          position: 'absolute',
+          top: '80px',
+          left: '0',
+          right: '0',
+          zIndex: 1000,
+          display: 'flex',
+          justifyContent: 'center',
+          pointerEvents: 'auto'
+        }}>
+          <div style={{ width: '500px', maxWidth: '90%' }}>
+            <ExpandablePointCard
+              point={newPointObject}
+              isSelected={false}
+              isHighlighted={false}
+              onSelect={() => {}}
+              onHighlight={() => {}}
+              onUpdate={handleNewPointSave}
+              onCancel={handleCancelNewPoint}
+              isNew={true}
+              autoFocus={autoFocusNewPoint}
+            />
+          </div>
+        </div>
       )}
+      
       {showCollectorManager && <CollectorManager onClose={() => setShowCollectorManager(false)} onUpdate={fetchData} />}
       {showTaxonManagerGlobal && <TaxonManager onClose={() => setShowTaxonManagerGlobal(false)} onUpdate={fetchData} />}
       {showStudyManager && <StudyManager onClose={() => setShowStudyManager(false)} onUpdate={fetchData} />}
@@ -351,7 +513,7 @@ function App() {
       {showBulkEditModal && (
         <BulkEditModal
           selectedPoints={selectedForBulk}
-          onClose={() => { setShowBulkEditModal(false); setSelectedForBulk([]); setHighlightedRows(new Set()); }}
+          onClose={() => { setShowBulkEditModal(false); setSelectedPoints(new Set()); setSelectedForBulk([]); }}
           onUpdate={fetchData}
         />
       )}
