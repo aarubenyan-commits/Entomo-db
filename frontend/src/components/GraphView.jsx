@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import axios from 'axios';
-import { IconButton, Icons } from './IconLibrary';
+import { IconButton } from './IconLibrary';
 import PointForm from './PointForm';
 import CollectorManager from './CollectorManager';
 import TaxonManager from './TaxonManager';
@@ -22,9 +22,11 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editType, setEditType] = useState(null);
   const [editGuid, setEditGuid] = useState(null);
-  const [connectedNodes, setConnectedNodes] = useState([]);
+  const [currentNodeId, setCurrentNodeId] = useState(null);
   
   const fgRef = useRef();
+  const abortControllerRef = useRef(null);
+  const doubleClickTimeoutRef = useRef(null); // Для предотвращения конфликта с обычным кликом
 
   useEffect(() => {
     loadAllNodes();
@@ -32,7 +34,12 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
 
   useEffect(() => {
     if (selectedNode) {
-      loadGraphForNode(selectedNode);
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      abortControllerRef.current = new AbortController();
+      loadGraphForNode(selectedNode, abortControllerRef.current.signal);
+      setCurrentNodeId(selectedNode.id);
     }
   }, [selectedNode, depth]);
 
@@ -48,55 +55,52 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
 
       const nodes = [];
       
-      // Сборщики (люди)
       personsRes.data.forEach(p => {
         nodes.push({ 
           id: p.guid, 
           name: p.display_name, 
           type: 'person', 
           group: 1,
-          showLabel: true // всегда показываем текст
+          showLabel: true
         });
       });
 
-      // Виды
       taxaRes.data.forEach(t => {
         nodes.push({ 
           id: t.guid, 
           name: t.display_name || `${t.genus} ${t.species || ''}`, 
           type: 'species', 
           group: 3,
-          showLabel: true, // всегда показываем текст
+          showLabel: true,
           genus: t.genus, 
           species: t.species, 
           subspecies: t.subspecies
         });
       });
 
-      // Точки
       pointsRes.data.forEach(p => {
         nodes.push({
           id: p.guid, 
           name: p.location_original || p.display_date || 'Без названия',
           type: 'point', 
           group: 2,
-          showLabel: false, // текст только при наведении/выделении
+          showLabel: false,
           location: p.location_original, 
           date: p.display_date, 
           collector: p.collector_name,
           latitude: p.latitude, 
-          longitude: p.longitude
+          longitude: p.longitude,
+          collectors: p.collectors
         });
       });
 
-      // Исследования
       studiesRes.data.forEach(s => {
         nodes.push({
           id: s.guid, 
           name: s.title || s.url || 'Исследование',
           type: 'study', 
           group: 4,
-          showLabel: false, // текст только при наведении/выделении
+          showLabel: false,
           title: s.title, 
           url: s.url, 
           description: s.description, 
@@ -105,9 +109,10 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
       });
 
       setAllNodes(nodes);
-      console.log('Загружено узлов:', nodes.length, 'из них исследований:', studiesRes.data.length);
     } catch (error) {
-      console.error('Ошибка загрузки узлов:', error);
+      if (error.name !== 'AbortError') {
+        console.error('Ошибка загрузки узлов:', error);
+      }
     } finally {
       setLoading(false);
     }
@@ -118,8 +123,9 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
     return node?.type || 'point';
   };
 
-  const loadGraphForNode = async (node) => {
+  const loadGraphForNode = async (node, signal) => {
     setLoading(true);
+    
     try {
       const nodesSet = new Set();
       const linksSet = new Set();
@@ -129,69 +135,100 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
       nodesSet.add(node.id);
       nodesList.push(node);
       
-      const loadConnections = async (currentNodeId, currentDepth, visited = new Set()) => {
-        if (currentDepth > depth || visited.has(currentNodeId)) return;
-        visited.add(currentNodeId);
+      const queue = [{ nodeId: node.id, currentDepth: 0 }];
+      const visited = new Set();
+      visited.add(node.id);
+      
+      while (queue.length > 0) {
+        const { nodeId, currentDepth } = queue.shift();
+        
+        if (currentDepth >= depth) continue;
         
         try {
-          const response = await axios.get(`${API_URL}/objects/${getNodeType(currentNodeId)}/${currentNodeId}/links`);
+          const nodeType = getNodeType(nodeId);
+          const response = await axios.get(`${API_URL}/objects/${nodeType}/${nodeId}/links`, { signal });
           
           for (const link of response.data) {
-            let targetId = null;
+            let targetId = link.target_guid;
             
-            if (link.direction === 'outgoing') {
-              targetId = link.target_guid;
-            } else {
-              targetId = link.target_guid;
-            }
-            
-            if (targetId && !nodesSet.has(targetId)) {
-              const targetNode = allNodes.find(n => n.id === targetId);
-              if (targetNode) {
-                nodesSet.add(targetId);
-                nodesList.push(targetNode);
-                await loadConnections(targetId, currentDepth + 1, visited);
-              }
-            }
-            
-            const linkKey = `${currentNodeId}-${targetId}`;
+            const linkKey = `${nodeId}-${targetId}`;
             if (!linksSet.has(linkKey) && targetId) {
               linksSet.add(linkKey);
               linksList.push({
-                source: currentNodeId,
+                source: nodeId,
                 target: targetId,
                 relation_type: link.relation_type,
                 link_guid: link.link_guid
               });
             }
+            
+            if (!nodesSet.has(targetId)) {
+              const targetNode = allNodes.find(n => n.id === targetId);
+              if (targetNode) {
+                nodesSet.add(targetId);
+                nodesList.push(targetNode);
+                
+                if (!visited.has(targetId)) {
+                  visited.add(targetId);
+                  queue.push({ nodeId: targetId, currentDepth: currentDepth + 1 });
+                }
+              }
+            }
           }
         } catch (error) {
-          console.error('Ошибка загрузки связей:', error);
+          if (error.name !== 'AbortError') {
+            console.error('Ошибка загрузки связей:', error);
+          }
         }
-      };
-      
-      await loadConnections(node.id, 1);
+      }
       
       setGraphData({ nodes: nodesList, links: linksList });
       
-      const connected = linksList.map(l => ({
-        source: l.source,
-        target: l.target,
-        type: l.relation_type
-      }));
-      setConnectedNodes(connected);
+      setTimeout(() => {
+        if (fgRef.current) {
+          fgRef.current.zoomToFit(400);
+        }
+      }, 100);
       
     } catch (error) {
-      console.error('Ошибка загрузки графа:', error);
+      if (error.name !== 'AbortError') {
+        console.error('Ошибка загрузки графа:', error);
+      }
     } finally {
       setLoading(false);
     }
   };
 
+  // ========== НОВЫЙ ОБРАБОТЧИК ДВОЙНОГО КЛИКА ==========
+  const handleNodeDoubleClick = (node) => {
+    // Очищаем таймаут, если был (предотвращаем открытие деталей после двойного клика)
+    if (doubleClickTimeoutRef.current) {
+      clearTimeout(doubleClickTimeoutRef.current);
+      doubleClickTimeoutRef.current = null;
+    }
+    
+    // Открываем форму редактирования в зависимости от типа узла
+    setEditType(node.type);
+    setEditGuid(node.id);
+    setShowEditDialog(true);
+    setShowNodeDetails(false);
+  };
+
+  // ========== ИЗМЕНЕННЫЙ ОБРАБОТЧИК ОДИНАРНОГО КЛИКА ==========
   const handleNodeClick = (node) => {
-    setSelectedNode(node);
-    setShowNodeDetails(true);
-    setNodeDetails(node);
+    // Задержка перед открытием деталей, чтобы проверить не было ли двойного клика
+    if (doubleClickTimeoutRef.current) {
+      clearTimeout(doubleClickTimeoutRef.current);
+      doubleClickTimeoutRef.current = null;
+    }
+    
+    doubleClickTimeoutRef.current = setTimeout(() => {
+      // Это одинарный клик - показываем детали
+      setSelectedNode(node);
+      setShowNodeDetails(true);
+      setNodeDetails(node);
+      doubleClickTimeoutRef.current = null;
+    }, 200);
   };
 
   const handleSearch = async () => {
@@ -255,45 +292,21 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
     }
   };
 
-  // Размер узлов: точки меньше на 70%
   const getNodeSize = (node) => {
-    switch (node.type) {
-      case 'point': return 2;   // было 10, уменьшили на 70%
-      case 'person': return 2;
-      case 'species': return 2;
-      case 'study': return 2;
-      default: return 2;
-    }
+    return 2; // Увеличил размер для лучшей кликабельности
   };
 
-  // Отображение текста на узлах
-  const getNodeLabel = (node) => {
-    const icon = node.type === 'person' ? '👤 ' : node.type === 'species' ? '🔬 ' : '';
-    
-    // Для людей и видов всегда показываем текст
-    if (node.type === 'person' || node.type === 'species') {
-      let label = node.name;
-      if (label && label.length > 20) {
-        label = label.substring(0, 17) + '...';
-      }
-      return icon + label;
-    }
-    
-    // Для точек и исследований - текст при наведении (через tooltip)
-    return '';
-  };
-
-  // Всплывающая подсказка при наведении
   const getNodeTooltip = (node) => {
     switch (node.type) {
       case 'point':
-        return `📍 ${node.name}\n📅 ${node.date || 'дата не указана'}\n👤 ${node.collector || 'сборщик не указан'}`;
+        const collectorNames = node.collectors?.map(c => c.display_name).join(', ') || node.collector || 'сборщик не указан';
+        return `📍 ${node.name}\n📅 ${node.date || 'дата не указана'}\n👤 ${collectorNames}\n\n💡 Двойной клик - редактировать`;
       case 'study':
-        return `📚 ${node.name}\n✍️ ${node.authors || 'авторы не указаны'}`;
+        return `📚 ${node.name}\n✍️ ${node.authors || 'авторы не указаны'}\n\n💡 Двойной клик - редактировать`;
       case 'person':
-        return `👤 ${node.name}`;
+        return `👤 ${node.name}\n\n💡 Двойной клик - редактировать`;
       case 'species':
-        return `🔬 ${node.name}`;
+        return `🔬 ${node.name}\n\n💡 Двойной клик - редактировать`;
       default:
         return node.name;
     }
@@ -319,9 +332,49 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
     }
   };
 
+  // Рендер компонента для редактирования в зависимости от типа
+  const renderEditDialog = () => {
+    if (!showEditDialog || !editType || !editGuid) return null;
+    
+    const nodeData = allNodes.find(n => n.id === editGuid);
+    
+    switch (editType) {
+      case 'point':
+        return (
+          <PointForm
+            point={nodeData}
+            onClose={() => handleEditComplete(false)}
+            onSave={(success) => handleEditComplete(success)}
+          />
+        );
+      case 'person':
+        return (
+          <CollectorManager
+            onClose={() => handleEditComplete(false)}
+            onUpdate={() => handleEditComplete(true)}
+          />
+        );
+      case 'species':
+        return (
+          <TaxonManager
+            onClose={() => handleEditComplete(false)}
+            onUpdate={() => handleEditComplete(true)}
+          />
+        );
+      case 'study':
+        return (
+          <StudyManager
+            onClose={() => handleEditComplete(false)}
+            onUpdate={() => handleEditComplete(true)}
+          />
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', position: 'relative' }}>
-      {/* Верхняя панель */}
       <div style={{ 
         padding: '12px', 
         background: 'white', 
@@ -385,9 +438,9 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
             onChange={(e) => setDepth(parseInt(e.target.value))}
             style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #ccc', fontSize: '13px' }}
           >
-            <option value={1}>1 уровень (только прямые связи)</option>
-            <option value={2}>2 уровня (связи связей)</option>
-            <option value={3}>3 уровня (максимум)</option>
+            <option value={1}>1 уровень</option>
+            <option value={2}>2 уровня</option>
+            <option value={3}>3 уровня</option>
           </select>
         </div>
         
@@ -404,13 +457,13 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
               <strong>Выбрано:</strong> {getTypeIcon(selectedNode.type)} {selectedNode.name?.substring(0, 30)}
             </span>
             <IconButton icon="Info" onClick={() => setShowNodeDetails(true)} title="Подробнее" />
+            <IconButton icon="Edit" onClick={openEditDialog} title="Редактировать" style={{ background: '#27ae60', color: 'white' }} />
           </div>
         )}
         
         {loading && <div style={{ fontSize: '12px', color: '#666' }}>⏳ Загрузка...</div>}
       </div>
 
-      {/* Граф */}
       <div style={{ flex: 1, position: 'relative', background: '#f5f5f5' }}>
         {graphData.nodes.length > 0 ? (
           <ForceGraph2D
@@ -430,10 +483,10 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
             linkColor={() => '#aaa'}
             linkWidth={2}
             onNodeClick={handleNodeClick}
+            onNodeDoubleClick={handleNodeDoubleClick}  // ← НОВЫЙ ПРОП!
             cooldownTicks={50}
             onEngineStop={() => fgRef.current?.zoomToFit(400)}
             backgroundColor="#f5f5f5"
-            // Кастомный рендер текста на узлах
             nodeCanvasObject={(node, ctx, globalScale) => {
               const size = getNodeSize(node);
               ctx.fillStyle = getNodeColor(node);
@@ -441,16 +494,22 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
               ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
               ctx.fill();
               
-              // Рисуем текст только для людей и видов
+              // Добавляем индикатор редактирования для всех узлов
+              ctx.fillStyle = '#fff';
+              ctx.font = `${Math.min(10, 10 / globalScale)}px Arial`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText('✎', node.x + size * 0.7, node.y - size * 0.7);
+              
               if (node.type === 'person' || node.type === 'species') {
                 ctx.fillStyle = '#333';
-                ctx.font = `${Math.min(12, 12 / globalScale)}px Arial`;
+                ctx.font = `${Math.min(11, 11 / globalScale)}px Arial`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 
                 let label = node.name;
-                if (label && label.length > 20) {
-                  label = label.substring(0, 17) + '...';
+                if (label && label.length > 15) {
+                  label = label.substring(0, 12) + '...';
                 }
                 ctx.fillText(label, node.x, node.y + size + 4);
               }
@@ -468,11 +527,11 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
           }}>
             <span style={{ fontSize: '48px' }}>🗺️</span>
             <p>Выберите элемент из поиска или кликните на узел для отображения связей</p>
+            <p style={{ fontSize: '12px' }}>💡 Двойной клик на узле - редактирование</p>
           </div>
         )}
       </div>
 
-      {/* Модальное окно с деталями узла - без изменений */}
       {showNodeDetails && nodeDetails && (
         <div style={{
           position: 'fixed',
@@ -523,10 +582,10 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
                     <div>{nodeDetails.date}</div>
                   </div>
                 )}
-                {nodeDetails.collector && (
+                {(nodeDetails.collectors?.length > 0 || nodeDetails.collector) && (
                   <div style={{ marginBottom: '10px' }}>
-                    <strong>👤 Сборщик:</strong>
-                    <div>{nodeDetails.collector}</div>
+                    <strong>👤 Сборщик(и):</strong>
+                    <div>{nodeDetails.collectors?.map(c => c.display_name).join(', ') || nodeDetails.collector}</div>
                   </div>
                 )}
               </>
@@ -572,82 +631,21 @@ const GraphView = ({ onUpdate, refreshTrigger }) => {
               </>
             )}
             
-            {connectedNodes.length > 0 && (
-              <div style={{ marginTop: '15px' }}>
-                <strong>🔗 Связи ({connectedNodes.length}):</strong>
-                <div style={{ maxHeight: '150px', overflow: 'auto', marginTop: '8px' }}>
-                  {connectedNodes.slice(0, 10).map((conn, idx) => {
-                    const targetNode = allNodes.find(n => n.id === conn.target);
-                    return targetNode ? (
-                      <div key={idx} style={{ 
-                        padding: '6px', 
-                        borderBottom: '1px solid #eee',
-                        fontSize: '12px',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center'
-                      }}>
-                        <span>
-                          {conn.type === 'collected_at' && '📌 собрал '}
-                          {conn.type === 'has_taxon' && '🔬 содержит '}
-                          {conn.type === 'source' && '📚 источник '}
-                          <strong>{getTypeIcon(targetNode.type)} {targetNode.name?.substring(0, 40)}</strong>
-                        </span>
-                      </div>
-                    ) : null;
-                  })}
-                  {connectedNodes.length > 10 && (
-                    <div style={{ fontSize: '11px', color: '#999', padding: '5px', textAlign: 'center' }}>
-                      и еще {connectedNodes.length - 10} связей...
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-            
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '20px' }}>
-              <IconButton icon="Edit" label="Редактировать" onClick={openEditDialog} style={{ background: '#3498db', color: 'white' }} />
+              <IconButton icon="Edit" label="Редактировать" onClick={openEditDialog} style={{ background: '#27ae60', color: 'white' }} />
               <IconButton icon="Close" label="Закрыть" onClick={() => setShowNodeDetails(false)} style={{ background: '#95a5a6', color: 'white' }} />
+            </div>
+            
+            <div style={{ marginTop: '15px', padding: '8px', background: '#e8f4f8', borderRadius: '6px', fontSize: '12px', textAlign: 'center' }}>
+              💡 Совет: Двойной клик на узле графа открывает редактор
             </div>
           </div>
         </div>
       )}
 
-      {/* Форма редактирования */}
-      {showEditDialog && editType && editGuid && (
-        <>
-          {editType === 'point' && (
-            <PointForm
-              point={allNodes.find(n => n.id === editGuid)}
-              onClose={() => handleEditComplete(false)}
-              onSave={handleEditComplete}
-            />
-          )}
-          {editType === 'person' && (
-            <CollectorManager
-              onClose={() => handleEditComplete(false)}
-              onUpdate={() => handleEditComplete(true)}
-            />
-          )}
-          {editType === 'species' && (
-            <TaxonManager
-              onClose={() => handleEditComplete(false)}
-              onUpdate={() => handleEditComplete(true)}
-            />
-          )}
-          {editType === 'study' && (
-            <StudyManager
-              onClose={() => handleEditComplete(false)}
-              onUpdate={() => handleEditComplete(true)}
-            />
-          )}
-        </>
-      )}
+      {renderEditDialog()}
     </div>
   );
 };
 
 export default GraphView;
-
-// Дополнение для GraphView - поддержка species и subspecies
-// В функции loadConnections нужно добавить обработку типов "species" и "subspecies"

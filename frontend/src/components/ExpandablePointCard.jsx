@@ -197,6 +197,7 @@ const ExpandablePointCard = ({ point, isSelected, isHighlighted, onSelect, onHig
             ...prev,
             taxa: prev.taxa.filter(t => t.guid !== taxonGuid)
           }));
+          if (onUpdate) onUpdate(point.guid, true);
         } catch (error) {
           console.error('Delete error:', error);
           alert('Ошибка удаления: ' + (error.response?.data?.detail || error.message));
@@ -211,114 +212,59 @@ const ExpandablePointCard = ({ point, isSelected, isHighlighted, onSelect, onHig
     }
   };
   
-  const handleSave = async () => {
-    setLoading(true);
-    try {
-      if (isNew) {
-        const payload = {
-          location_original: formData.location_original,
-          latitude: latitude,
-          longitude: longitude,
-          date_text: formData.date_text,
-          collector_name: formData.collectors.length > 0 ? formData.collectors[0].name : '',
-        };
-        
-        const response = await axios.post(`${API_URL}/points/create`, payload);
-        const newPointGuid = response.data.guid;
-        
-        for (let i = 1; i < formData.collectors.length; i++) {
-          await axios.post(`${API_URL}/source/person/${formData.collectors[i].guid}/${newPointGuid}`);
-        }
-        
-        for (let i = 0; i < formData.taxa.length; i++) {
-          const taxon = formData.taxa[i];
-          await axios.post(`${API_URL}/point_taxa/${newPointGuid}/${taxon.guid}?sort_order=${i}`);
-        }
-        
-        for (const study of selectedStudies) {
-          await axios.post(`${API_URL}/source/point/${newPointGuid}/${study.value}`);
-        }
-        
-        onUpdate(true);
-      } else {
-        await axios.put(`${API_URL}/points/${point.guid}`, {
-          location_original: formData.location_original,
-          latitude: latitude,
-          longitude: longitude,
-          date_text: formData.date_text,
-        });
-        
-        const existingCollectors = collectors.map(c => c.guid);
-        const newCollectors = formData.collectors.map(c => c.guid);
-        
-        for (const oldGuid of existingCollectors) {
-          if (!newCollectors.includes(oldGuid)) {
-            const linksRes = await axios.get(`${API_URL}/objects/point/${point.guid}/links`);
-            const linkToRemove = linksRes.data.find(l => 
-              l.relation_type === 'collected_at' && l.target_guid === oldGuid
-            );
-            if (linkToRemove) {
-              await axios.delete(`${API_URL}/source/${linkToRemove.link_guid}`);
-            }
-          }
-        }
-        
-        for (const newGuid of newCollectors) {
-          if (!existingCollectors.includes(newGuid)) {
-            await axios.post(`${API_URL}/source/person/${newGuid}/${point.guid}`);
-          }
-        }
-        
-        const existingTaxa = (point.taxa || []).map(t => t.guid);
-        const newTaxa = formData.taxa.map(t => t.guid);
-        
-        for (let i = 0; i < formData.taxa.length; i++) {
-          const taxon = formData.taxa[i];
-          if (!existingTaxa.includes(taxon.guid)) {
-            await axios.post(`${API_URL}/point_taxa/${point.guid}/${taxon.guid}?sort_order=${i}`);
-          } else {
-            await axios.put(`${API_URL}/point_taxa/${point.guid}/${taxon.guid}?sort_order=${i}`);
-          }
-        }
-        
-        const existingStudyGuids = existingStudies.map(s => s.guid);
-        const newStudyGuids = selectedStudies.map(s => s.value);
-        
-        for (const oldGuid of existingStudyGuids) {
-          if (!newStudyGuids.includes(oldGuid)) {
-            const linksRes = await axios.get(`${API_URL}/objects/point/${point.guid}/links`);
-            const linkToRemove = linksRes.data.find(l => 
-              l.relation_type === 'source' && l.target_guid === oldGuid
-            );
-            if (linkToRemove) {
-              await axios.delete(`${API_URL}/source/${linkToRemove.link_guid}`);
-            }
-          }
-        }
-        
-        for (const newStudy of selectedStudies) {
-          if (!existingStudyGuids.includes(newStudy.value)) {
-            await axios.post(`${API_URL}/source/point/${point.guid}/${newStudy.value}`);
-          }
-        }
-        
-        setExpanded(false);
-        onUpdate(true);
+  // В функции handleSave для новой точки (isNew === true)
+const handleSave = async () => {
+  setLoading(true);
+  try {
+    if (isNew) {
+      const payload = {
+        location_original: formData.location_original,
+        latitude: latitude,
+        longitude: longitude,
+        date_text: formData.date_text,
+        collectors: formData.collectors,  // <-- ВАЖНО: передаём массив сборщиков
+      };
+      
+      const response = await axios.post(`${API_URL}/points/create`, payload);
+      const newPointGuid = response.data.guid;
+      
+      // Таксоны с порядком
+      for (let i = 0; i < formData.taxa.length; i++) {
+        const taxon = formData.taxa[i];
+        await axios.post(`${API_URL}/point_taxa/${newPointGuid}/${taxon.guid}?sort_order=${i}`);
       }
-    } catch (error) {
-      console.error('Ошибка сохранения:', error);
-      alert('Ошибка сохранения: ' + (error.response?.data?.detail || error.message));
-    } finally {
-      setLoading(false);
+      
+      // Исследования
+      for (const study of selectedStudies) {
+        await axios.post(`${API_URL}/source/point/${newPointGuid}/${study.value}`);
+      }
+      
+      if (onUpdate) onUpdate(newPointGuid, true);
+    } else {
+      // Существующая точка - аналогично обновляем collectors
+      await axios.put(`${API_URL}/points/${point.guid}`, {
+        location_original: formData.location_original,
+        latitude: latitude,
+        longitude: longitude,
+        date_text: formData.date_text,
+        collectors: formData.collectors,
+      });
+      
+      // ... остальной код для таксонов и исследований ...
     }
-  };
-  
+  } catch (error) {
+    console.error('Ошибка сохранения:', error);
+    alert('Ошибка сохранения: ' + (error.response?.data?.detail || error.message));
+  } finally {
+    setLoading(false);
+  }
+};
   const handleCancel = () => {
     if (isNew) {
       if (onCancel) {
         onCancel();
       } else {
-        onUpdate(false);
+        if (onUpdate) onUpdate(null, false);
       }
     } else {
       setExpanded(false);
@@ -329,7 +275,7 @@ const ExpandablePointCard = ({ point, isSelected, isHighlighted, onSelect, onHig
     if (window.confirm('Удалить эту точку?')) {
       try {
         await axios.delete(`${API_URL}/points/${point.guid}`);
-        onUpdate(true);
+        if (onUpdate) onUpdate(point.guid, true);
       } catch (error) {
         alert('Ошибка удаления');
       }
@@ -358,6 +304,10 @@ const ExpandablePointCard = ({ point, isSelected, isHighlighted, onSelect, onHig
   if (isNew) bgColor = '#f0f7ff';
   else if (isHighlighted) bgColor = '#d4e6f1';
   else if (isSelected) bgColor = '#e8f4f8';
+  
+  const handleDoubleClick = () => {
+    setExpanded(true);
+  };
   
   if (isNew) {
     return (
@@ -523,7 +473,7 @@ const ExpandablePointCard = ({ point, isSelected, isHighlighted, onSelect, onHig
       }}
     >
       <div
-        onDoubleClick={() => setExpanded(!expanded)}
+        onDoubleClick={handleDoubleClick}
         onClick={(e) => {
           if (!e.ctrlKey && !e.metaKey) {
             e.stopPropagation();

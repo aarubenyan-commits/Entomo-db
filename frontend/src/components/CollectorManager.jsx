@@ -12,6 +12,7 @@ const CollectorManager = ({ onClose, onUpdate }) => {
   const [deleteDialog, setDeleteDialog] = useState(null);
   const [selectedPoints, setSelectedPoints] = useState(new Set());
   const [selectedReplacement, setSelectedReplacement] = useState(null);
+  const [loadingPoints, setLoadingPoints] = useState(false);
 
   const loadCollectors = async () => {
     const res = await axios.get(`${API_URL}/persons`);
@@ -66,9 +67,12 @@ const CollectorManager = ({ onClose, onUpdate }) => {
   };
 
   const handleDeleteClick = async (collector) => {
+    setLoadingPoints(true);
     try {
+      // Используем обновленный эндпоинт, который ищет точки в обоих направлениях
       const pointsRes = await axios.get(`${API_URL}/persons/${collector.guid}/points`);
       const points = pointsRes.data;
+      
       if (points.length === 0) {
         if (window.confirm(`Удалить сборщика "${collector.display_name}"?`)) {
           await axios.delete(`${API_URL}/persons/${collector.guid}`);
@@ -86,6 +90,8 @@ const CollectorManager = ({ onClose, onUpdate }) => {
     } catch (err) {
       console.error(err);
       alert('Ошибка при проверке связей');
+    } finally {
+      setLoadingPoints(false);
     }
   };
 

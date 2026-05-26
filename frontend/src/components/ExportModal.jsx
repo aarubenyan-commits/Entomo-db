@@ -4,46 +4,51 @@ import axios from 'axios';
 const API_URL = 'http://127.0.0.1:8000';
 
 const ExportModal = ({ onClose, filters }) => {
-  const [exportType, setExportType] = useState('points');
   const [exporting, setExporting] = useState(false);
+  
+  // Все доступные колонки для экспорта
   const [selectedColumns, setSelectedColumns] = useState({
+    // Геоданные
     latitude: true,
     longitude: true,
-    latitude_dms: false,
-    longitude_dms: false,
+    latitude_dms: true,
+    longitude_dms: true,
+    // Локация и дата
     location_original: true,
     date_text: true,
-    collector: true,
+    // Связи
+    collector_name: true,
     taxa: true,
-    sources: true
+    source: true
   });
 
   const toggleColumn = (column) => {
     setSelectedColumns(prev => ({ ...prev, [column]: !prev[column] }));
   };
 
+  const toggleAll = () => {
+    const allSelected = Object.values(selectedColumns).every(v => v === true);
+    const newState = {};
+    Object.keys(selectedColumns).forEach(key => {
+      newState[key] = !allSelected;
+    });
+    setSelectedColumns(newState);
+  };
+
   const handleExport = async () => {
     setExporting(true);
     
     try {
-      let url = '';
-      if (exportType === 'points') {
-        // Собираем параметры фильтров
-        const params = new URLSearchParams();
-        if (filters?.year) params.append('year', filters.year);
-        if (filters?.month) params.append('month', filters.month);
-        if (filters?.day) params.append('day', filters.day);
-        if (filters?.collector) params.append('collector', filters.collector);
-        
-        url = `${API_URL}/export/points?${params.toString()}`;
-      } else if (exportType === 'taxa') {
-        url = `${API_URL}/export/taxa`;
-      } else if (exportType === 'studies') {
-        url = `${API_URL}/export/studies`;
-      }
-      
-      // Скачиваем файл
-      const response = await axios.get(url, {
+      // Отправляем выбранные колонки на бэкенд
+      const response = await axios.post(`${API_URL}/export/points`, {
+        filters: {
+          year: filters?.year || '',
+          month: filters?.month || '',
+          day: filters?.day || '',
+          collector: filters?.collector || ''
+        },
+        columns: selectedColumns
+      }, {
         responseType: 'blob'
       });
       
@@ -51,7 +56,7 @@ const ExportModal = ({ onClose, filters }) => {
       const blob = new Blob([response.data], { type: 'text/csv' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = `entomo_export_${exportType}_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.csv`;
+      link.download = `entomo_export_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.csv`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -60,7 +65,7 @@ const ExportModal = ({ onClose, filters }) => {
       onClose();
     } catch (error) {
       console.error('Ошибка экспорта:', error);
-      alert('Ошибка при экспорте данных');
+      alert('Ошибка при экспорте данных: ' + (error.response?.data?.detail || error.message));
     } finally {
       setExporting(false);
     }
@@ -81,75 +86,22 @@ const ExportModal = ({ onClose, filters }) => {
     }}>
       <div style={{
         backgroundColor: 'white',
-        padding: '20px',
-        borderRadius: '8px',
-        width: '500px',
-        maxWidth: '90%'
+        padding: '24px',
+        borderRadius: '12px',
+        width: '550px',
+        maxWidth: '90%',
+        maxHeight: '90vh',
+        overflow: 'auto',
+        boxShadow: '0 10px 40px rgba(0,0,0,0.3)'
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h2 style={{ margin: 0 }}>Экспорт данных</h2>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer' }}>✖️</button>
+          <h2 style={{ margin: 0 }}>📤 Экспорт данных</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '24px', cursor: 'pointer', color: '#666' }}>✖️</button>
         </div>
 
-        <div style={{ marginBottom: '20px' }}>
-          <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Тип данных:</label>
-          <select
-            value={exportType}
-            onChange={(e) => setExportType(e.target.value)}
-            style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
-          >
-            <option value="points">Точки сбора</option>
-            <option value="taxa">Таксоны</option>
-            <option value="studies">Исследования</option>
-          </select>
-        </div>
-
-        {exportType === 'points' && (
-          <div style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>Колонки для экспорта:</label>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input type="checkbox" checked={selectedColumns.latitude} onChange={() => toggleColumn('latitude')} />
-                Широта (дес.)
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input type="checkbox" checked={selectedColumns.longitude} onChange={() => toggleColumn('longitude')} />
-                Долгота (дес.)
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input type="checkbox" checked={selectedColumns.latitude_dms} onChange={() => toggleColumn('latitude_dms')} />
-                Широта (DMS)
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input type="checkbox" checked={selectedColumns.longitude_dms} onChange={() => toggleColumn('longitude_dms')} />
-                Долгота (DMS)
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input type="checkbox" checked={selectedColumns.location_original} onChange={() => toggleColumn('location_original')} />
-                Описание места
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input type="checkbox" checked={selectedColumns.date_text} onChange={() => toggleColumn('date_text')} />
-                Дата
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input type="checkbox" checked={selectedColumns.collector} onChange={() => toggleColumn('collector')} />
-                Сборщик
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input type="checkbox" checked={selectedColumns.taxa} onChange={() => toggleColumn('taxa')} />
-                Таксоны
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input type="checkbox" checked={selectedColumns.sources} onChange={() => toggleColumn('sources')} />
-                Источники
-              </label>
-            </div>
-          </div>
-        )}
-
-        {filters?.year || filters?.month || filters?.day || filters?.collector ? (
-          <div style={{ marginBottom: '20px', padding: '10px', background: '#e8f4f8', borderRadius: '4px' }}>
+        {/* Фильтры */}
+        {(filters?.year || filters?.month || filters?.day || filters?.collector) && (
+          <div style={{ marginBottom: '20px', padding: '12px', background: '#e8f4f8', borderRadius: '8px', borderLeft: '4px solid #2196F3' }}>
             <strong>🔍 Активные фильтры:</strong>
             <ul style={{ margin: '8px 0 0 20px', fontSize: '12px' }}>
               {filters.year && <li>Год: {filters.year}</li>}
@@ -158,25 +110,109 @@ const ExportModal = ({ onClose, filters }) => {
               {filters.collector && <li>Сборщик: {filters.collector}</li>}
             </ul>
           </div>
-        ) : (
-          <div style={{ marginBottom: '20px', padding: '10px', background: '#f0f0f0', borderRadius: '4px' }}>
-            📊 Будут экспортированы все данные
-          </div>
         )}
 
-        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+        {/* Выбор колонок */}
+        <div style={{ marginBottom: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <label style={{ fontWeight: 'bold', fontSize: '14px' }}>📋 Выберите колонки для экспорта:</label>
+            <button 
+              onClick={toggleAll}
+              style={{ 
+                padding: '4px 12px', 
+                fontSize: '11px', 
+                background: '#e9ecef', 
+                border: '1px solid #dee2e6', 
+                borderRadius: '4px', 
+                cursor: 'pointer' 
+              }}
+            >
+              {Object.values(selectedColumns).every(v => v === true) ? 'Снять все' : 'Выбрать все'}
+            </button>
+          </div>
+          
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: 'repeat(2, 1fr)', 
+            gap: '10px',
+            padding: '12px',
+            background: '#f8f9fa',
+            borderRadius: '8px',
+            border: '1px solid #e9ecef'
+          }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+              <input type="checkbox" checked={selectedColumns.latitude} onChange={() => toggleColumn('latitude')} />
+              <span>🌐 Широта (дес.)</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+              <input type="checkbox" checked={selectedColumns.longitude} onChange={() => toggleColumn('longitude')} />
+              <span>🌐 Долгота (дес.)</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+              <input type="checkbox" checked={selectedColumns.latitude_dms} onChange={() => toggleColumn('latitude_dms')} />
+              <span>🗺️ Широта (DMS)</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+              <input type="checkbox" checked={selectedColumns.longitude_dms} onChange={() => toggleColumn('longitude_dms')} />
+              <span>🗺️ Долгота (DMS)</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+              <input type="checkbox" checked={selectedColumns.location_original} onChange={() => toggleColumn('location_original')} />
+              <span>📍 Описание места</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+              <input type="checkbox" checked={selectedColumns.date_text} onChange={() => toggleColumn('date_text')} />
+              <span>📅 Дата</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+              <input type="checkbox" checked={selectedColumns.collector_name} onChange={() => toggleColumn('collector_name')} />
+              <span>👤 Сборщик(и)</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+              <input type="checkbox" checked={selectedColumns.taxa} onChange={() => toggleColumn('taxa')} />
+              <span>🔬 Таксоны</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+              <input type="checkbox" checked={selectedColumns.source} onChange={() => toggleColumn('source')} />
+              <span>📚 Источник(и)</span>
+            </label>
+          </div>
+        </div>
+
+        <div style={{ 
+          marginBottom: '20px', 
+          padding: '10px', 
+          background: '#fff3cd', 
+          borderRadius: '6px', 
+          fontSize: '12px',
+          borderLeft: '3px solid #ffc107'
+        }}>
+          💡 <strong>Совет:</strong> При экспорте всех колонок файл будет совместим с мастером импорта.
+          Вы сможете загрузить его обратно без изменений.
+        </div>
+
+        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
           <button
             onClick={onClose}
-            style={{ padding: '8px 16px', background: '#95a5a6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+            style={{ padding: '10px 20px', background: '#95a5a6', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '14px' }}
           >
             Отмена
           </button>
           <button
             onClick={handleExport}
             disabled={exporting}
-            style={{ padding: '8px 16px', background: '#27ae60', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+            style={{ 
+              padding: '10px 24px', 
+              background: '#27ae60', 
+              color: 'white', 
+              border: 'none', 
+              borderRadius: '6px', 
+              cursor: exporting ? 'not-allowed' : 'pointer',
+              opacity: exporting ? 0.7 : 1,
+              fontSize: '14px'
+            }}
           >
-            {exporting ? 'Экспорт...' : '📥 Экспортировать'}
+            {exporting ? '⏳ Экспорт...' : '📥 Экспортировать'}
           </button>
         </div>
       </div>

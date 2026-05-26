@@ -105,14 +105,14 @@ const ImportWizard = ({ onClose, onImportComplete }) => {
     }
   };
 
-  const addNewRow = () => {
-    const newRow = {
-      latitude: '', longitude: '', location_original: '', date_text: '',
-      collector_name: '', genus: '', species: '', subspecies: '',
-      display_name: '', notes: '', source: ''
-    };
-    setEditableRows([...editableRows, newRow]);
+const addNewRow = () => {
+  const newRow = {
+    latitude: '', longitude: '', latitude_dms: '', longitude_dms: '',
+    location_original: '', date_text: '', collector_name: '', taxa: '', 
+    source: '', notes: '', genus: '', species: '', subspecies: '', display_name: ''
   };
+  setEditableRows([...editableRows, newRow]);
+};
 
   const copyDownColumn = (rowIdx, field) => {
     const value = editableRows[rowIdx][field];
@@ -288,19 +288,19 @@ const ImportWizard = ({ onClose, onImportComplete }) => {
     return { status: 'success', message: 'Готово к импорту' };
   };
 
-  const columns = [
-    { key: 'genus', label: 'Род', multiline: false },
-    { key: 'species', label: 'Вид', multiline: false },
-    { key: 'subspecies', label: 'Подвид', multiline: false },
-    { key: 'display_name', label: 'Отображаемое имя', multiline: true },
-    { key: 'location_original', label: 'Описание места', multiline: true },
-    { key: 'date_text', label: 'Дата', multiline: false },
-    { key: 'collector_name', label: 'Сборщик', multiline: false },
-    { key: 'source', label: 'Источник', multiline: true },
-    { key: 'notes', label: 'Примечания', multiline: true },
-    { key: 'latitude', label: 'Широта', multiline: false },
-    { key: 'longitude', label: 'Долгота', multiline: false }
-  ];
+ const columns = [
+  { key: 'latitude', label: 'Широта (дес.)', multiline: false },
+  { key: 'longitude', label: 'Долгота (дес.)', multiline: false },
+  { key: 'latitude_dms', label: 'Широта (DMS)', multiline: false },
+  { key: 'longitude_dms', label: 'Долгота (DMS)', multiline: false },
+  { key: 'location_original', label: 'Описание места', multiline: true },
+  { key: 'date_text', label: 'Дата', multiline: false },
+  { key: 'collector_name', label: 'Сборщик(и)', multiline: false },
+  { key: 'taxa', label: 'Таксоны', multiline: true },
+  { key: 'source', label: 'Источник(и)', multiline: true },
+  { key: 'notes', label: 'Примечания', multiline: true }
+];
+
 
   return (
     <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 2000 }} onClick={closeContextMenu}>
