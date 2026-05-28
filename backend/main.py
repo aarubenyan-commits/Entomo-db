@@ -241,7 +241,7 @@ def update_subspecies(guid: str, subspecies_data: dict):
     
     if "subspecies_name" in subspecies_data:
         subspecies.subspecies_name = subspecies_data["subspecies_name"].strip().lower()
-        subspecies.display_name = subspecies_data["subspecies_name"]  # FIXED: обновляем display_name
+        subspecies.display_name = subspecies_data["subspecies_name"]
     
     subspecies.updated_at = now
     db.commit()
@@ -292,7 +292,6 @@ def delete_person(guid: str):
     if not person:
         raise HTTPException(404, "Person not found")
     
-    # Удаляем связи
     db.query(Link).filter((Link.from_guid == guid) | (Link.to_guid == guid)).delete()
     db.delete(person)
     db.commit()
@@ -303,14 +302,12 @@ def delete_person(guid: str):
 def get_person_points(guid: str):
     """Ищет точки в ОБОИХ направлениях (множественные сборщики)"""
     db = SessionLocal()
-    # Ищем точки где person является сборщиком (from_guid)
     links_as_from = db.query(Link).filter(
         Link.from_guid == guid,
         Link.from_type == "person",
         Link.relation_type == "collected_at"
     ).all()
     
-    # Ищем точки где person является сборщиком (to_guid) - для обратных связей
     links_as_to = db.query(Link).filter(
         Link.to_guid == guid,
         Link.to_type == "person",
@@ -395,7 +392,6 @@ def delete_study(guid: str):
 # ========== ТОЧКИ ==========
 def enrich_point_with_relations(point, db):
     """Вспомогательная функция для обогащения точки всеми связями"""
-    # Получаем ВСЕХ сборщиков
     collectors = []
     collector_links = db.query(Link).filter(
         ((Link.from_guid == point.guid) & (Link.to_type == "person")) |
@@ -409,7 +405,6 @@ def enrich_point_with_relations(point, db):
         if person:
             collectors.append({"guid": person.guid, "display_name": person.display_name})
     
-    # Получаем ВСЕ таксоны
     taxa = []
     taxon_links = db.query(Link).filter(
         Link.to_guid == point.guid,
@@ -438,10 +433,8 @@ def enrich_point_with_relations(point, db):
                         "sort_order": link.sort_order
                     })
     
-    # Сортируем таксоны по sort_order
     taxa.sort(key=lambda x: x.get("sort_order", 0))
     
-    # Получаем ВСЕ исследования
     studies = []
     study_links = db.query(Link).filter(
         Link.from_guid == point.guid,
@@ -527,13 +520,11 @@ def create_point(point_data: dict):
     db.add(point)
     db.flush()
     
-    # Поддержка множественных сборщиков
     collectors_data = point_data.get("collectors", [])
     if collectors_data:
         for collector_info in collectors_data:
             collector_guid = collector_info.get("guid")
             if collector_guid:
-                # Проверяем существование связи
                 existing = db.query(Link).filter(
                     ((Link.from_guid == collector_guid) & (Link.to_guid == point.guid)) |
                     ((Link.to_guid == collector_guid) & (Link.from_guid == point.guid)),
@@ -548,7 +539,6 @@ def create_point(point_data: dict):
                     )
                     db.add(link)
     else:
-        # Обратная совместимость: один сборщик через collector_name
         collector_name = point_data.get("collector_name")
         if collector_name and collector_name.strip():
             person = db.query(Person).filter(Person.display_name == collector_name).first()
@@ -592,16 +582,13 @@ def update_point(guid: str, point_data: dict):
     point.date_text = point_data.get("date_text", point.date_text)
     point.updated_at = now
     
-    # Обновляем сборщиков (поддержка множественных)
     collectors_data = point_data.get("collectors", [])
     if collectors_data:
-        # Удаляем старые связи
         db.query(Link).filter(
             ((Link.from_guid == guid) | (Link.to_guid == guid)),
             Link.relation_type == "collected_at"
         ).delete()
         
-        # Добавляем новые
         for collector_info in collectors_data:
             collector_guid = collector_info.get("guid")
             if collector_guid:
@@ -613,10 +600,8 @@ def update_point(guid: str, point_data: dict):
                 )
                 db.add(link)
     else:
-        # Обратная совместимость: один сборщик через collector_name
         collector_name = point_data.get("collector_name")
         if collector_name and collector_name.strip():
-            # Удаляем старые
             db.query(Link).filter(
                 ((Link.from_guid == guid) | (Link.to_guid == guid)),
                 Link.relation_type == "collected_at"
@@ -909,7 +894,6 @@ def remove_taxon_from_point(point_guid: str, taxon_guid: str):
 # ========== МАССОВОЕ ОБНОВЛЕНИЕ ПОРЯДКА ТАКСОНОВ ==========
 @app.post("/point_taxa/{point_guid}/reorder")
 def reorder_taxa(point_guid: str, taxon_guids: List[str]):
-    """Обновляет порядок всех таксонов в точке"""
     db = SessionLocal()
     try:
         for idx, taxon_guid in enumerate(taxon_guids):
@@ -930,6 +914,54 @@ def reorder_taxa(point_guid: str, taxon_guids: List[str]):
         db.close()
 
 # ========== ИМПОРТ ==========
+def parse_taxa_string(taxa_str):
+    """Парсит строку с таксонами вида 'род вид подвид, род вид, род'"""
+    if not taxa_str or not isinstance(taxa_str, str):
+        return []
+    
+    taxa_list = []
+    parts = [p.strip() for p in taxa_str.split(',') if p.strip()]
+    
+    for part in parts:
+        words = part.split()
+        if len(words) == 1:
+            taxa_list.append({
+                "genus": words[0],
+                "species": None,
+                "subspecies": None,
+                "full_name": words[0]
+            })
+        elif len(words) == 2:
+            taxa_list.append({
+                "genus": words[0],
+                "species": words[1],
+                "subspecies": None,
+                "full_name": f"{words[0]} {words[1]}"
+            })
+        else:
+            genus = words[0]
+            species = words[1]
+            subspecies = " ".join(words[2:])
+            taxa_list.append({
+                "genus": genus,
+                "species": species,
+                "subspecies": subspecies,
+                "full_name": f"{genus} {species} {subspecies}"
+            })
+    
+    return taxa_list
+
+def parse_collectors_string(collector_str):
+    if not collector_str or not isinstance(collector_str, str):
+        return []
+    return [c.strip() for c in collector_str.split(',') if c.strip()]
+
+def parse_sources_string(source_str):
+    """Парсит строку с источниками через запятую"""
+    if not source_str or not isinstance(source_str, str):
+        return []
+    return [s.strip() for s in source_str.split(',') if s.strip()]
+
 @app.post("/import/parse-file")
 async def parse_import_file(file: UploadFile = File(...)):
     content = await file.read()
@@ -943,15 +975,18 @@ async def parse_import_file(file: UploadFile = File(...)):
             rows.append({
                 "latitude": row.get("latitude", ""),
                 "longitude": row.get("longitude", ""),
+                "latitude_dms": row.get("latitude_dms", ""),
+                "longitude_dms": row.get("longitude_dms", ""),
                 "location_original": row.get("location_original", ""),
                 "date_text": row.get("date_text", ""),
                 "collector_name": row.get("collector_name", ""),
+                "taxa": row.get("taxa", ""),
+                "source": row.get("source", ""),
+                "notes": row.get("notes", ""),
                 "genus": row.get("genus", ""),
                 "species": row.get("species", ""),
                 "subspecies": row.get("subspecies", ""),
-                "display_name": row.get("display_name", ""),
-                "notes": row.get("notes", ""),
-                "source": row.get("source", "")
+                "display_name": row.get("display_name", "")
             })
     
     return {"rows": rows, "total": len(rows), "errors": []}
@@ -975,7 +1010,6 @@ async def confirm_import(data: dict):
     db = SessionLocal()
     now = datetime.now().isoformat()
     
-    # Статистика
     stats = {
         "points_created": 0,
         "points_updated": 0,
@@ -993,62 +1027,13 @@ async def confirm_import(data: dict):
         "errors": []
     }
     
-    # Функция для парсинга строки с таксонами
-    def parse_taxa_string(taxa_str):
-        """Парсит строку с таксонами вида 'род вид подвид, род вид, род'"""
-        if not taxa_str or not isinstance(taxa_str, str):
-            return []
-        
-        taxa_list = []
-        # Разделяем по запятой
-        parts = [p.strip() for p in taxa_str.split(',') if p.strip()]
-        
-        for part in parts:
-            words = part.split()
-            if len(words) == 1:
-                # Только род
-                taxa_list.append({
-                    "genus": words[0],
-                    "species": None,
-                    "subspecies": None,
-                    "full_name": words[0]
-                })
-            elif len(words) == 2:
-                # Род + вид
-                taxa_list.append({
-                    "genus": words[0],
-                    "species": words[1],
-                    "subspecies": None,
-                    "full_name": f"{words[0]} {words[1]}"
-                })
-            else:
-                # Род + вид + подвид (и возможно ещё слова)
-                genus = words[0]
-                species = words[1]
-                subspecies = " ".join(words[2:])
-                taxa_list.append({
-                    "genus": genus,
-                    "species": species,
-                    "subspecies": subspecies,
-                    "full_name": f"{genus} {species} {subspecies}"
-                })
-        
-        return taxa_list
-    
-    # Функция для парсинга сборщиков
-    def parse_collectors_string(collector_str):
-        if not collector_str or not isinstance(collector_str, str):
-            return []
-        return [c.strip() for c in collector_str.split(',') if c.strip()]
-    
     for idx, row in enumerate(rows):
         try:
-            # 1. Парсим таксоны из строки (если есть поле taxa)
+            # 1. Парсим таксоны из поля taxa
             all_taxa = []
             if row.get("taxa"):
                 all_taxa = parse_taxa_string(row["taxa"])
             elif row.get("genus") and row.get("species"):
-                # Обратная совместимость со старым форматом
                 all_taxa.append({
                     "genus": row.get("genus", "").strip().capitalize(),
                     "species": row.get("species", "").strip().lower(),
@@ -1056,7 +1041,6 @@ async def confirm_import(data: dict):
                     "full_name": row.get("display_name", "")
                 })
             
-            # Создаём/находим все таксоны
             taxon_objects = []
             for taxon_info in all_taxa:
                 genus = taxon_info["genus"].strip().capitalize() if taxon_info["genus"] else None
@@ -1066,7 +1050,6 @@ async def confirm_import(data: dict):
                 if not genus:
                     continue
                 
-                # Сначала ищем/создаём вид
                 species = None
                 if species_name:
                     species = db.query(Species).filter(
@@ -1087,7 +1070,6 @@ async def confirm_import(data: dict):
                         db.flush()
                         stats["species_created"] += 1
                 
-                # Если есть подвид, ищем/создаём его
                 if subspecies_name and species:
                     subspecies = db.query(Subspecies).filter(
                         Subspecies.species_guid == species.guid,
@@ -1111,7 +1093,6 @@ async def confirm_import(data: dict):
                 elif species:
                     taxon_objects.append(("species", species))
                 elif not species_name:
-                    # Только род - создаём "вид" с названием sp.
                     species = db.query(Species).filter(
                         Species.genus == genus,
                         Species.species_name == "sp."
@@ -1144,28 +1125,29 @@ async def confirm_import(data: dict):
                         stats["persons_created"] += 1
                     person_objects.append(person)
             
-            # 3. Источник (исследование)
-            source_title = row.get("source", "").strip()
-            study = None
-            if source_title:
-                study = db.query(Study).filter(Study.title == source_title).first()
-                if study:
-                    stats["studies_existing"] += 1
-                else:
-                    study = Study(
-                        title=source_title,
-                        description=row.get("notes", ""),
-                        created_at=now, updated_at=now
-                    )
-                    db.add(study)
-                    db.flush()
-                    stats["studies_created"] += 1
+            # 3. Парсим источники (МНОЖЕСТВЕННЫЕ через запятую)
+            source_titles = parse_sources_string(row.get("source", ""))
+            study_objects = []
+            for source_title in source_titles:
+                if source_title:
+                    study = db.query(Study).filter(Study.title == source_title).first()
+                    if study:
+                        stats["studies_existing"] += 1
+                    else:
+                        study = Study(
+                            title=source_title,
+                            description=row.get("notes", ""),
+                            created_at=now, updated_at=now
+                        )
+                        db.add(study)
+                        db.flush()
+                        stats["studies_created"] += 1
+                    study_objects.append(study)
             
             # 4. Координаты
             lat = None
             lon = None
             
-            # Сначала пробуем десятичные
             lat_str = row.get("latitude", "")
             lon_str = row.get("longitude", "")
             if lat_str and lon_str:
@@ -1175,7 +1157,6 @@ async def confirm_import(data: dict):
                 except:
                     pass
             
-            # Если десятичные не распознаны, пробуем DMS
             if lat is None:
                 lat_dms = row.get("latitude_dms", "")
                 lon_dms = row.get("longitude_dms", "")
@@ -1186,7 +1167,7 @@ async def confirm_import(data: dict):
             lat_dms_str = decimal_to_dms_advanced(lat, is_lat=True) if lat is not None else None
             lon_dms_str = decimal_to_dms_advanced(lon, is_lat=False) if lon is not None else None
             
-            # 5. Ищем существующую точку по координатам
+            # 5. Ищем существующую точку
             point = None
             if lat is not None and lon is not None:
                 point = db.query(Point).filter(
@@ -1194,7 +1175,6 @@ async def confirm_import(data: dict):
                     Point.longitude == lon
                 ).first()
             
-            # Если не нашли по координатам, пробуем по названию места
             location = row.get("location_original", "")
             if not point and location:
                 point = db.query(Point).filter(
@@ -1202,9 +1182,7 @@ async def confirm_import(data: dict):
                 ).first()
             
             if point:
-                # ОБНОВЛЕНИЕ существующей точки - добавляем новые связи, НЕ удаляя старые
                 stats["points_updated"] += 1
-                # Обновляем основные поля (если они пустые в существующей точке)
                 if point.latitude is None and lat is not None:
                     point.latitude = lat
                     point.latitude_dms = lat_dms_str
@@ -1217,7 +1195,6 @@ async def confirm_import(data: dict):
                     point.date_text = row.get("date_text")
                 point.updated_at = now
             else:
-                # СОЗДАНИЕ новой точки
                 point = Point(
                     latitude=lat, longitude=lon,
                     latitude_dms=lat_dms_str, longitude_dms=lon_dms_str,
@@ -1229,7 +1206,7 @@ async def confirm_import(data: dict):
                 db.flush()
                 stats["points_created"] += 1
             
-            # 6. Добавляем связи с таксонами (ЕСЛИ их ещё нет)
+            # 6. Добавляем связи с таксонами (дедупликация)
             for taxon_type, taxon in taxon_objects:
                 existing = db.query(Link).filter(
                     Link.from_guid == taxon.guid,
@@ -1241,12 +1218,12 @@ async def confirm_import(data: dict):
                         from_guid=taxon.guid, to_guid=point.guid,
                         from_type=taxon_type, to_type="point", relation_type="has_taxon",
                         direction="many_to_many", is_directed=1,
-                        sort_order=len(taxon_objects),  # порядок по индексу
+                        sort_order=len(taxon_objects),
                         created_at=now, updated_at=now
                     ))
                     stats["taxa_links_added"] += 1
             
-            # 7. Добавляем связи со сборщиками (ЕСЛИ их ещё нет)
+            # 7. Добавляем связи со сборщиками (дедупликация)
             for person in person_objects:
                 existing = db.query(Link).filter(
                     ((Link.from_guid == person.guid) & (Link.to_guid == point.guid)) |
@@ -1262,8 +1239,8 @@ async def confirm_import(data: dict):
                     ))
                     stats["person_links_added"] += 1
             
-            # 8. Добавляем связь с исследованием (ЕСЛИ её ещё нет)
-            if study:
+            # 8. Добавляем связи с исследованиями (дедупликация)
+            for study in study_objects:
                 existing = db.query(Link).filter(
                     Link.from_guid == point.guid,
                     Link.to_guid == study.guid,
@@ -1278,7 +1255,6 @@ async def confirm_import(data: dict):
                     ))
                     stats["study_links_added"] += 1
                 
-                # Также привязываем исследование к таксонам (если нужно)
                 for taxon_type, taxon in taxon_objects:
                     existing = db.query(Link).filter(
                         Link.from_guid == taxon.guid,
@@ -1301,7 +1277,6 @@ async def confirm_import(data: dict):
     db.commit()
     db.close()
     
-    # Формируем сообщение
     message_parts = []
     if stats["points_created"] > 0:
         message_parts.append(f"создано {stats['points_created']} точек")
@@ -1341,20 +1316,16 @@ async def confirm_import(data: dict):
 # ========== ЭКСПОРТ ==========
 @app.post("/export/points")
 async def export_points_with_columns(request: dict):
-    """Экспорт точек с выбранными колонками"""
     db = SessionLocal()
     
     filters = request.get("filters", {})
     columns = request.get("columns", {})
     
-    # Строим запрос с фильтрами
     query = db.query(Point)
     
-    # Применяем фильтры если есть
     if filters.get("year"):
         query = query.filter(Point.date_text.contains(filters["year"]))
     if filters.get("collector"):
-        # Сложный фильтр по сборщику через связи
         points_with_collector = db.query(Link).filter(
             Link.relation_type == "collected_at"
         ).all()
@@ -1368,7 +1339,6 @@ async def export_points_with_columns(request: dict):
     
     points = query.all()
     
-    # Определяем колонки для CSV
     csv_columns = []
     if columns.get("latitude", True):
         csv_columns.append("latitude")
@@ -1389,25 +1359,17 @@ async def export_points_with_columns(request: dict):
     if columns.get("source", True):
         csv_columns.append("source")
     
-    # Создаем CSV
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(csv_columns)
     
     for point in points:
-        # Получаем данные о связях
         relations = enrich_point_with_relations(point, db)
         
-        # Собираем сборщиков в строку
         collector_names = ", ".join([c["display_name"] for c in relations["collectors"]])
-        
-        # Собираем таксоны в строку (с учетом порядка)
         taxa_names = ", ".join([t["display_name"] for t in relations["taxa"]])
-        
-        # Собираем источники в строку
         source_names = ", ".join([s["title"] for s in relations["studies"]])
         
-        # Формируем строку данных в том же порядке, что и заголовки
         row = []
         for col in csv_columns:
             if col == "latitude":
@@ -1479,7 +1441,6 @@ def get_object_links(obj_type: str, guid: str):
     ).all()
     result = []
     for link in outgoing:
-        # Пропускаем связи с подвидами для чистоты графа
         if link.to_type == "subspecies":
             continue
         result.append({
@@ -1542,7 +1503,6 @@ def bulk_update_points(request: BulkEditRequest):
     try:
         points = db.query(Point).filter(Point.guid.in_(request.point_guids)).all()
         
-        # Замена сборщика с удалением (поддержка множественных сборщиков)
         replaced_person = None
         if "replace_person" in request.updates:
             replace_data = request.updates["replace_person"]
@@ -1559,14 +1519,12 @@ def bulk_update_points(request: BulkEditRequest):
                     errors.append(f"Новый сборщик не найден")
                 else:
                     for point in points:
-                        # Удаляем старого сборщика из всех связей (оба направления)
                         db.query(Link).filter(
                             ((Link.from_guid == old_person_guid) & (Link.to_guid == point.guid)) |
                             ((Link.to_guid == old_person_guid) & (Link.from_guid == point.guid)),
                             Link.relation_type == "collected_at"
                         ).delete()
                         
-                        # Добавляем нового сборщика
                         existing_link = db.query(Link).filter(
                             ((Link.from_guid == new_person_guid) & (Link.to_guid == point.guid)) |
                             ((Link.to_guid == new_person_guid) & (Link.from_guid == point.guid)),
@@ -1581,7 +1539,6 @@ def bulk_update_points(request: BulkEditRequest):
                             ))
                         point.updated_at = now
                     
-                    # Удаляем старого сборщика
                     db.query(Link).filter(
                         (Link.from_guid == old_person_guid) | (Link.to_guid == old_person_guid)
                     ).delete()
@@ -1589,7 +1546,6 @@ def bulk_update_points(request: BulkEditRequest):
                     replaced_person = old_person.display_name
                     updated_count = len(points)
         
-        # Обычная замена сборщика (массовая замена на одного)
         if "collector_name" in request.updates and request.updates["collector_name"] and not replaced_person:
             collector_name = request.updates["collector_name"]
             new_person = db.query(Person).filter(Person.display_name == collector_name).first()
@@ -1599,13 +1555,11 @@ def bulk_update_points(request: BulkEditRequest):
                 db.flush()
             
             for point in points:
-                # Удаляем всех старых сборщиков
                 db.query(Link).filter(
                     (Link.from_guid == point.guid) | (Link.to_guid == point.guid),
                     Link.relation_type == "collected_at"
                 ).delete()
                 
-                # Добавляем нового
                 db.add(Link(
                     from_guid=new_person.guid, to_guid=point.guid,
                     from_type="person", to_type="point", relation_type="collected_at",
@@ -1615,7 +1569,6 @@ def bulk_update_points(request: BulkEditRequest):
                 point.updated_at = now
                 updated_count += 1
         
-        # Привязка исследования
         if "study_guid" in request.updates and request.updates["study_guid"]:
             study = db.query(Study).filter(Study.guid == request.updates["study_guid"]).first()
             if not study:
@@ -1636,7 +1589,6 @@ def bulk_update_points(request: BulkEditRequest):
                     point.updated_at = now
                 updated_count = len(points)
         
-        # Замена таксонов
         if "taxa_guids" in request.updates and request.updates["taxa_guids"]:
             taxa_guids = request.updates["taxa_guids"]
             new_taxa = []
@@ -1650,13 +1602,11 @@ def bulk_update_points(request: BulkEditRequest):
                         new_taxa.append(("subspecies", subspecies))
             
             for point in points:
-                # Удаляем старые таксоны
                 db.query(Link).filter(
                     Link.to_guid == point.guid,
                     Link.relation_type == "has_taxon"
                 ).delete()
                 
-                # Добавляем новые
                 for idx, (taxon_type, taxon) in enumerate(new_taxa):
                     db.add(Link(
                         from_guid=taxon.guid, to_guid=point.guid,
@@ -1690,7 +1640,6 @@ def get_bulk_info(point_guids: List[str]):
         taxa_guids = set()
         
         for point in points:
-            # Ищем сборщиков в обоих направлениях
             links = db.query(Link).filter(
                 ((Link.from_guid == point.guid) | (Link.to_guid == point.guid)),
                 Link.relation_type == "collected_at"
@@ -1722,7 +1671,7 @@ def get_bulk_info(point_guids: List[str]):
     finally:
         db.close()
 
-# ========== ДЕТАЛЬНЫЕ ЭНДПОИНТЫ ДЛЯ ВИДОВ И ПОДВИДОВ ==========
+# ========== ДЕТАЛЬНЫЕ ЭНДПОИНТЫ ==========
 @app.get("/species/{guid}")
 def get_species(guid: str):
     db = SessionLocal()
@@ -1796,4 +1745,3 @@ def delete_subspecies(guid: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
-    

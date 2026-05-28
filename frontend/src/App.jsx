@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { LoadScript } from '@react-google-maps/api';
-import { jsPDF } from 'jspdf';
-import QRCode from 'qrcode';
 import CollectorManager from './components/CollectorManager';
 import StudyManager from './components/StudyManager';
 import TaxonManager from './components/TaxonManager';
@@ -13,36 +11,19 @@ import MapView from './components/MapView';
 import FilterDrawer from './components/FilterDrawer';
 import GraphView from './components/GraphView';
 import ExpandablePointCard from './components/ExpandablePointCard';
+import MassActionsMenu from './components/MassActionsMenu';
+import PrintLabelsModal from './components/PrintLabelsModal';
 
 const API_URL = 'http://127.0.0.1:8000';
 const MAPS_API_KEY = 'AIzaSyBt-bcHW2_VAjETvUFvfaPPLVhhe9Iqr7E';
 const POINTS_PER_PAGE = 20;
 
-const qrCache = new Map();
-
-async function generateQRDataUrl(url, size = 150) {
-  if (qrCache.has(url)) return qrCache.get(url);
-  try {
-    const qrDataUrl = await QRCode.toDataURL(url, { width: size, margin: 1 });
-    qrCache.set(url, qrDataUrl);
-    return qrDataUrl;
-  } catch (error) {
-    console.error('QR error:', error);
-    return null;
-  }
-}
-
-// Функция для парсинга даты из формата "20.IV.2022" или "20.04.2022"
 function parseDate(dateStr) {
   if (!dateStr) return 0;
-  
-  // Формат "20.IV.2022"
   const monthMap = {
     'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5, 'VI': 6,
     'VII': 7, 'VIII': 8, 'IX': 9, 'X': 10, 'XI': 11, 'XII': 12
   };
-  
-  // Проверяем на римские месяцы
   for (const [roman, num] of Object.entries(monthMap)) {
     if (dateStr.includes(roman)) {
       const match = dateStr.match(/(\d+)\./);
@@ -52,8 +33,6 @@ function parseDate(dateStr) {
       return new Date(year, num - 1, day).getTime();
     }
   }
-  
-  // Формат "20.04.2022"
   const parts = dateStr.split('.');
   if (parts.length === 3) {
     const day = parseInt(parts[0]);
@@ -63,14 +42,12 @@ function parseDate(dateStr) {
       return new Date(year, month, day).getTime();
     }
   }
-  
   return 0;
 }
 
 function App() {
   const [points, setPoints] = useState([]);
   const [filteredPoints, setFilteredPoints] = useState([]);
-  const [selectedQuantities, setSelectedQuantities] = useState({});
   const [persons, setPersons] = useState([]);
   const [filterYear, setFilterYear] = useState('');
   const [filterMonth, setFilterMonth] = useState('');
@@ -90,6 +67,7 @@ function App() {
   const [showImportWizard, setShowImportWizard] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showBulkEditModal, setShowBulkEditModal] = useState(false);
+  const [showPrintModal, setShowPrintModal] = useState(false);
   const [selectedForBulk, setSelectedForBulk] = useState([]);
   const [viewMode, setViewMode] = useState('map');
   
@@ -98,7 +76,6 @@ function App() {
   const hasActiveFilters = filterYear || filterMonth || filterDay || filterCollector || filterTaxonIds.length > 0;
   const usePagination = !hasActiveFilters && filteredPoints.length > POINTS_PER_PAGE;
   const totalPages = usePagination ? Math.ceil(filteredPoints.length / POINTS_PER_PAGE) : 1;
-  
   const paginatedPoints = usePagination && !newPointMode
     ? filteredPoints.slice((currentPage - 1) * POINTS_PER_PAGE, currentPage * POINTS_PER_PAGE)
     : filteredPoints;
@@ -118,7 +95,6 @@ function App() {
       setTaxa(taxaRes.data);
       setPersons(personsRes.data);
       
-      // Сортировка от новых к старым с парсингом дат
       const sorted = pointsRes.data.sort((a, b) => {
         const dateA = parseDate(a.display_date);
         const dateB = parseDate(b.display_date);
@@ -150,27 +126,6 @@ function App() {
     setFilteredPoints(filtered);
   };
 
-  const updateQuantity = (guid, quantity) => {
-    const num = parseInt(quantity) || 0;
-    if (num <= 0) {
-      const newQuantities = { ...selectedQuantities };
-      delete newQuantities[guid];
-      setSelectedQuantities(newQuantities);
-    } else {
-      setSelectedQuantities({ ...selectedQuantities, [guid]: num });
-    }
-  };
-
-  const resetQuantities = () => setSelectedQuantities({});
-  const selectAll = () => {
-    const newQuantities = {};
-    const pointsToSelect = newPointMode ? paginatedPoints : paginatedPoints;
-    pointsToSelect.forEach(p => { newQuantities[p.guid] = 1; });
-    setSelectedQuantities(newQuantities);
-  };
-
-  const getTotalLabels = () => Object.values(selectedQuantities).reduce((sum, q) => sum + q, 0);
-
   const handleSelectPoint = (guid, isSelected) => {
     const newSelected = new Set(selectedPoints);
     if (isSelected) {
@@ -183,21 +138,20 @@ function App() {
   };
 
   const handleSelectAllVisible = () => {
-    const visiblePoints = newPointMode ? paginatedPoints : paginatedPoints;
-    if (selectedPoints.size === visiblePoints.length && visiblePoints.length > 0) {
-      setSelectedPoints(new Set());
-      setSelectedForBulk([]);
-    } else {
-      const allGuids = visiblePoints.map(p => p.guid);
-      setSelectedPoints(new Set(allGuids));
-      setSelectedForBulk(allGuids);
-    }
+  // Выделяем ВСЕ отфильтрованные точки (все страницы)
+   const allFilteredGuids = filteredPoints.map(p => p.guid);
+   if (selectedPoints.size === allFilteredGuids.length && allFilteredGuids.length > 0) {
+     setSelectedPoints(new Set());
+     setSelectedForBulk([]);
+   } else {
+     setSelectedPoints(new Set(allFilteredGuids));
+     setSelectedForBulk(allFilteredGuids);
+   }
   };
 
   const handleClearAllSelections = () => {
     setSelectedPoints(new Set());
     setSelectedForBulk([]);
-    setSelectedQuantities({});
   };
 
   const handleMarkerClick = (guid) => {
@@ -233,76 +187,22 @@ function App() {
     }
   };
 
-  const handleDeletePoint = async (guid) => {
-    if (window.confirm('Удалить эту точку?')) {
-      try {
-        await axios.delete(`${API_URL}/points/${guid}`);
-        fetchData();
-        if (highlightedPoint === guid) setHighlightedPoint(null);
-        if (selectedPoints.has(guid)) {
-          const newSelected = new Set(selectedPoints);
-          newSelected.delete(guid);
-          setSelectedPoints(newSelected);
-          setSelectedForBulk(Array.from(newSelected));
+  const handlePointUpdate = (guid, success) => {
+    if (success) {
+      fetchData();
+      setHighlightedPoint(guid);
+      setTimeout(() => {
+        const element = document.getElementById(`point-card-${guid}`);
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          element.style.transition = 'background-color 0.3s';
+          element.style.backgroundColor = '#d4e6f1';
+          setTimeout(() => {
+            if (element) element.style.backgroundColor = '';
+          }, 1500);
         }
-      } catch (error) {
-        alert('Ошибка удаления');
-      }
+      }, 300);
     }
-  };
-
-  const printLabels = async () => {
-    const selected = points.filter(p => selectedQuantities[p.guid]);
-    if (selected.length === 0) { alert('Выберите точки'); return; }
-    for (const point of selected) {
-      if (point.latitude && point.longitude) {
-        await generateQRDataUrl(`https://www.google.com/maps?q=${point.latitude},${point.longitude}`, 150);
-      }
-    }
-    const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
-    const pageWidth = 210, pageHeight = 297;
-    const labelW = 13.7, labelH = 7;
-    const margin = 5, gap = 0.2;
-    const cols = Math.floor((pageWidth - margin * 2 + gap) / (labelW + gap));
-    const rows = Math.floor((pageHeight - margin * 2 + gap) / (labelH + gap));
-    let currentRow = 0, currentCol = 0;
-    for (const point of selected) {
-      const quantity = selectedQuantities[point.guid];
-      for (let copy = 0; copy < quantity; copy++) {
-        if (currentRow >= rows) { pdf.addPage(); currentRow = 0; currentCol = 0; }
-        const x = margin + currentCol * (labelW + gap);
-        const y = margin + currentRow * (labelH + gap);
-        pdf.setDrawColor(0);
-        pdf.setLineWidth(0.1);
-        pdf.rect(x, y, labelW, labelH);
-        pdf.setFillColor(0);
-        pdf.circle(x + 0.8, y + 3.5, 0.12, 'F');
-        pdf.setFontSize(2.8);
-        let textY = y + 1.2;
-        const textX = x + 1.2;
-        let locationText = point.location_original || '—';
-        if (locationText.length > 35) locationText = locationText.substring(0, 32) + '...';
-        const locationLines = pdf.splitTextToSize(locationText, labelW - 2.5);
-        locationLines.forEach(line => { pdf.text(line, textX, textY); textY += 0.9; });
-        if (point.display_date) { pdf.text(point.display_date, textX, textY); textY += 1.0; }
-        if (point.latitude_dms && point.longitude_dms) {
-          const coordsY = y + labelH - 2.8;
-          pdf.text(point.latitude_dms, textX, coordsY);
-          pdf.text(point.longitude_dms, textX, coordsY + 1.0);
-        }
-        const qrDataUrl = qrCache.get(`https://www.google.com/maps?q=${point.latitude},${point.longitude}`);
-        if (qrDataUrl) {
-          const qrSize = 5;
-          pdf.addImage(qrDataUrl, 'PNG', x + labelW - qrSize - 0.4, y + labelH - qrSize - 0.4, qrSize, qrSize);
-        }
-        const collectorNames = point.collectors?.map(c => c.display_name).join(', ');
-        if (collectorNames) { pdf.text(collectorNames, textX, y + labelH - 0.6); }
-        currentCol++;
-        if (currentCol >= cols) { currentCol = 0; currentRow++; }
-      }
-    }
-    pdf.save('labels.pdf');
-    alert('PDF готов!');
   };
 
   const handleNewPoint = (lat = null, lng = null) => {
@@ -366,7 +266,6 @@ function App() {
 
   return (
     <div style={{ height: '100vh', width: '100vw', overflow: 'hidden', position: 'relative' }}>
-      {/* Основной контент - затемняется оверлеем */}
       <div style={{ 
         height: '100%', 
         width: '100%', 
@@ -388,16 +287,6 @@ function App() {
               </button>
               <button onClick={() => setShowImportWizard(true)} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>📥 Импорт</button>
               <button onClick={() => setShowExportModal(true)} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>📤 Экспорт</button>
-                            <button onClick={() => setShowBulkEditModal(true)} disabled={selectedForBulk.length === 0} style={{ background: selectedForBulk.length === 0 ? '#6b9ec7' : '#e67e22', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: selectedForBulk.length === 0 ? 'not-allowed' : 'pointer', fontSize: '11px', opacity: selectedForBulk.length === 0 ? 0.5 : 1 }}>
-                Массовое {selectedForBulk.length > 0 ? `(${selectedForBulk.length})` : ''}
-              </button>
-            </div>
-            
-            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', background: '#6b9ec7', padding: '3px 8px', borderRadius: '6px' }}>
-              <span style={{ color: 'white', fontSize: '11px' }}>🏷️</span>
-              <button onClick={selectAll} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>Выбрать всё</button>
-              <button onClick={resetQuantities} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>Сброс кол-ва</button>
-              <button onClick={printLabels} style={{ background: 'none', color: 'white', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>🖨️ Печать ({getTotalLabels()})</button>
             </div>
           </div>
           
@@ -414,6 +303,15 @@ function App() {
               <div style={{ padding: '8px 10px', background: '#f8f9fa', borderBottom: '1px solid #e2e6ea', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <button onClick={handleSelectAllVisible} style={{ padding: '4px 12px', fontSize: '11px', background: '#e9ecef', border: '1px solid #dee2e6', borderRadius: '6px', cursor: 'pointer' }}>☐ Выбрать все</button>
                 <button onClick={handleClearAllSelections} style={{ padding: '4px 12px', fontSize: '11px', background: '#e9ecef', border: '1px solid #dee2e6', borderRadius: '6px', cursor: 'pointer' }}>✕ Сбросить всё</button>
+                
+                <MassActionsMenu
+                  selectedCount={selectedPoints.size}
+                  onPrint={() => setShowPrintModal(true)}
+                  onEditCollector={() => setShowBulkEditModal(true)}
+                  onEditStudy={() => setShowBulkEditModal(true)}
+                  onEditTaxa={() => setShowBulkEditModal(true)}
+                />
+                
                 <FilterDrawer
                   filterYear={filterYear}
                   setFilterYear={setFilterYear}
@@ -442,7 +340,7 @@ function App() {
                       isHighlighted={highlightedPoint === point.guid}
                       onSelect={handleSelectPoint}
                       onHighlight={handleHighlightPoint}
-                      onUpdate={fetchData}
+                      onUpdate={handlePointUpdate}
                     />
                   </div>
                 ))}
@@ -459,7 +357,7 @@ function App() {
           )}
           
           <div style={{ width: viewMode === 'map' ? '70%' : '100%', height: '100%', position: 'relative' }}>
-            <LoadScript googleMapsApiKey={MAPS_API_KEY} loadingElement={<div>Загрузка карт...</div>}>
+            <LoadScript googleMapsApiKey={MAPS_API_KEY} loadingElement={<div>Loading maps...</div>}>
               <div style={{ height: '100%', width: '100%' }}>
                 {viewMode === 'map' ? (
                   <MapView
@@ -477,13 +375,12 @@ function App() {
         </div>
       </div>
       
-      {/* Форма новой точки - поверх затемнённого фона */}
       {newPointMode && newPointObject && (
         <div style={{
           position: 'absolute',
           top: '80px',
-          left: '0',
-          right: '0',
+          left: 0,
+          right: 0,
           zIndex: 1000,
           display: 'flex',
           justifyContent: 'center',
@@ -510,11 +407,20 @@ function App() {
       {showStudyManager && <StudyManager onClose={() => setShowStudyManager(false)} onUpdate={fetchData} />}
       {showImportWizard && <ImportWizard onClose={() => setShowImportWizard(false)} onImportComplete={fetchData} />}
       {showExportModal && <ExportModal filters={{year: filterYear, month: filterMonth, day: filterDay, collector: filterCollector}} onClose={() => setShowExportModal(false)} />}
+      
       {showBulkEditModal && (
         <BulkEditModal
           selectedPoints={selectedForBulk}
           onClose={() => { setShowBulkEditModal(false); setSelectedPoints(new Set()); setSelectedForBulk([]); }}
           onUpdate={fetchData}
+        />
+      )}
+      
+      {showPrintModal && (
+        <PrintLabelsModal
+          points={points}
+          selectedPointGuids={selectedForBulk}
+          onClose={() => setShowPrintModal(false)}
         />
       )}
     </div>

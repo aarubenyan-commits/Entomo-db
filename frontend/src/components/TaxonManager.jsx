@@ -15,6 +15,9 @@ const TaxonManager = ({ onClose, onUpdate }) => {
   const [newSpeciesName, setNewSpeciesName] = useState('');
   const [showAddSubspecies, setShowAddSubspecies] = useState(null);
   const [newSubspeciesName, setNewSubspeciesName] = useState('');
+  const [editingSpecies, setEditingSpecies] = useState(null);
+  const [editingSubspecies, setEditingSubspecies] = useState(null);
+  const [editName, setEditName] = useState('');
 
   useEffect(() => {
     fetchData();
@@ -38,9 +41,7 @@ const TaxonManager = ({ onClose, onUpdate }) => {
       alert('Укажите название рода');
       return;
     }
-    // Создаем временный вид для рода (без вида)
     try {
-      // Род можно создать только через вид, поэтому используем временное название вида
       await axios.post(`${API_URL}/species`, null, {
         params: {
           genus: newGenusName,
@@ -72,7 +73,6 @@ const TaxonManager = ({ onClose, onUpdate }) => {
       setNewSpeciesName('');
       setShowAddSpecies(null);
       fetchData();
-      // Раскрываем род после добавления
       setExpandedGenera(prev => ({ ...prev, [genus]: true }));
     } catch (error) {
       alert('Ошибка создания вида');
@@ -115,6 +115,43 @@ const TaxonManager = ({ onClose, onUpdate }) => {
     }
   };
 
+  const handleEditSpecies = (species) => {
+    setEditingSpecies(species.guid);
+    setEditName(species.species_name);
+  };
+
+  const handleEditSubspecies = (subspecies) => {
+    setEditingSubspecies(subspecies.guid);
+    setEditName(subspecies.subspecies_name);
+  };
+
+  const handleSaveEdit = async (guid, type, currentGenus = null) => {
+    if (!editName.trim()) {
+      alert('Название не может быть пустым');
+      return;
+    }
+    try {
+      if (type === 'species') {
+        const species = allSpecies.find(s => s.guid === guid);
+        await axios.put(`${API_URL}/taxa/${guid}`, {
+          genus: species.genus,
+          species: editName,
+          display_name: `${species.genus} ${editName}`
+        });
+      } else {
+        await axios.put(`${API_URL}/subspecies/${guid}`, {
+          subspecies_name: editName
+        });
+      }
+      fetchData();
+      setEditingSpecies(null);
+      setEditingSubspecies(null);
+      if (onUpdate) onUpdate();
+    } catch (error) {
+      alert('Ошибка сохранения');
+    }
+  };
+
   const toggleGenus = (genus) => {
     setExpandedGenera(prev => ({ ...prev, [genus]: !prev[genus] }));
   };
@@ -123,7 +160,6 @@ const TaxonManager = ({ onClose, onUpdate }) => {
     setExpandedSpecies(prev => ({ ...prev, [speciesGuid]: !prev[speciesGuid] }));
   };
 
-  // Группировка видов по родам
   const speciesByGenus = {};
   for (const s of allSpecies) {
     if (!speciesByGenus[s.genus]) speciesByGenus[s.genus] = [];
@@ -156,29 +192,14 @@ const TaxonManager = ({ onClose, onUpdate }) => {
           <IconButton icon="Close" onClick={() => { onClose(); }} style={{ padding: '4px', fontSize: '18px' }} />
         </div>
 
-        {/* Дерево таксонов */}
         <div style={{ maxHeight: '70vh', overflow: 'auto', border: '1px solid #eee', borderRadius: '8px', padding: '10px' }}>
-          {/* Кнопка создания нового рода */}
           {!showAddGenus ? (
             <div style={{ marginBottom: '15px', padding: '4px', display: 'flex', justifyContent: 'flex-start' }}>
-              <span 
-                onClick={() => setShowAddGenus(true)}
-                style={{ cursor: 'pointer', color: '#27ae60', fontSize: '14px', fontWeight: 'bold' }}
-              >
-                ➕ Создать род
-              </span>
+              <span onClick={() => setShowAddGenus(true)} style={{ cursor: 'pointer', color: '#27ae60', fontSize: '14px', fontWeight: 'bold' }}>➕ Создать род</span>
             </div>
           ) : (
             <div style={{ marginBottom: '15px', padding: '8px', background: '#f9f9f9', borderRadius: '4px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <input
-                type="text"
-                placeholder="Название рода"
-                value={newGenusName}
-                onChange={(e) => setNewGenusName(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleAddGenus()}
-                style={{ flex: 1, padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                autoFocus
-              />
+              <input type="text" placeholder="Название рода" value={newGenusName} onChange={(e) => setNewGenusName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddGenus()} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }} autoFocus />
               <IconButton icon="Save" onClick={handleAddGenus} style={{ background: '#27ae60', color: 'white', padding: '4px 8px' }} />
               <IconButton icon="Close" onClick={() => setShowAddGenus(false)} style={{ background: '#95a5a6', color: 'white', padding: '4px 8px' }} />
             </div>
@@ -189,36 +210,19 @@ const TaxonManager = ({ onClose, onUpdate }) => {
           ) : (
             Object.keys(speciesByGenus).sort().map(genus => (
               <div key={genus} style={{ marginBottom: '8px' }}>
-                <div 
-                  style={{ padding: '6px 4px', display: 'flex', alignItems: 'center', cursor: 'pointer', background: '#f5f5f5', borderRadius: '4px', justifyContent: 'space-between' }}
-                >
+                <div style={{ padding: '6px 4px', display: 'flex', alignItems: 'center', cursor: 'pointer', background: '#f5f5f5', borderRadius: '4px', justifyContent: 'space-between' }}>
                   <div style={{ display: 'flex', alignItems: 'center' }} onClick={() => toggleGenus(genus)}>
-                    <span style={{ fontSize: '12px', marginRight: '8px', userSelect: 'none' }}>
-                      {expandedGenera[genus] ? '▼' : '▶'}
-                    </span>
+                    <span style={{ fontSize: '12px', marginRight: '8px', userSelect: 'none' }}>{expandedGenera[genus] ? '▼' : '▶'}</span>
                     <span style={{ fontWeight: 'bold' }}>{genus}</span>
                   </div>
-                  <span 
-                    onClick={() => { setShowAddSpecies(genus); setNewSpeciesName(''); }}
-                    style={{ cursor: 'pointer', color: '#27ae60', fontSize: '12px', padding: '2px 6px' }}
-                  >
-                    ✚ добавить вид
-                  </span>
+                  <span onClick={() => { setShowAddSpecies(genus); setNewSpeciesName(''); }} style={{ cursor: 'pointer', color: '#27ae60', fontSize: '12px', padding: '2px 6px' }}>✚ добавить вид</span>
                 </div>
                 
                 {expandedGenera[genus] && (
                   <div style={{ paddingLeft: '20px', marginTop: '4px' }}>
                     {showAddSpecies === genus && (
                       <div style={{ marginBottom: '8px', padding: '8px', background: '#f9f9f9', borderRadius: '4px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <input
-                          type="text"
-                          placeholder="Название вида"
-                          value={newSpeciesName}
-                          onChange={(e) => setNewSpeciesName(e.target.value)}
-                          onKeyPress={(e) => e.key === 'Enter' && handleAddSpecies(genus)}
-                          style={{ flex: 1, padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                          autoFocus
-                        />
+                        <input type="text" placeholder="Название вида" value={newSpeciesName} onChange={(e) => setNewSpeciesName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddSpecies(genus)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }} autoFocus />
                         <IconButton icon="Save" onClick={() => handleAddSpecies(genus)} style={{ background: '#27ae60', color: 'white', padding: '4px 8px' }} />
                         <IconButton icon="Close" onClick={() => setShowAddSpecies(null)} style={{ background: '#95a5a6', color: 'white', padding: '4px 8px' }} />
                       </div>
@@ -230,24 +234,17 @@ const TaxonManager = ({ onClose, onUpdate }) => {
                       const isAddingSubspecies = showAddSubspecies === species.guid;
                       return (
                         <div key={species.guid} style={{ marginBottom: '4px' }}>
-                          <div 
-                            style={{ padding: '4px 4px', display: 'flex', alignItems: 'center', borderLeft: '2px solid #ddd', justifyContent: 'space-between' }}
-                          >
+                          <div style={{ padding: '4px 4px', display: 'flex', alignItems: 'center', borderLeft: '2px solid #ddd', justifyContent: 'space-between' }}>
                             <div style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }} onClick={() => hasSubspecies && toggleSpecies(species.guid)}>
-                              {hasSubspecies && (
-                                <span style={{ fontSize: '11px', marginRight: '6px', userSelect: 'none' }}>
-                                  {expandedSpecies[species.guid] ? '▼' : '▶'}
-                                </span>
+                              {hasSubspecies && <span style={{ fontSize: '11px', marginRight: '6px', userSelect: 'none' }}>{expandedSpecies[species.guid] ? '▼' : '▶'}</span>}
+                              {editingSpecies === species.guid ? (
+                                <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleSaveEdit(species.guid, 'species')} autoFocus style={{ fontSize: '12px', padding: '2px 4px', width: '120px' }} />
+                              ) : (
+                                <span style={{ fontStyle: 'italic', cursor: 'pointer' }} onDoubleClick={() => handleEditSpecies(species)} title="Двойной клик для редактирования">{species.species_name}</span>
                               )}
-                              <span style={{ fontStyle: 'italic' }}>{species.species_name}</span>
                             </div>
                             <div style={{ display: 'flex', gap: '8px' }}>
-                              <span 
-                                onClick={() => { setShowAddSubspecies(species.guid); setNewSubspeciesName(''); }}
-                                style={{ cursor: 'pointer', color: '#27ae60', fontSize: '11px' }}
-                              >
-                                ✚ подвид
-                              </span>
+                              <span onClick={() => { setShowAddSubspecies(species.guid); setNewSubspeciesName(''); }} style={{ cursor: 'pointer', color: '#27ae60', fontSize: '11px' }}>✚ подвид</span>
                               <IconButton icon="Delete" onClick={() => handleDelete(species.guid, 'species')} style={{ color: '#e74c3c', padding: '2px' }} />
                             </div>
                           </div>
@@ -256,7 +253,11 @@ const TaxonManager = ({ onClose, onUpdate }) => {
                             <div style={{ paddingLeft: '20px', borderLeft: '2px solid #ddd', marginLeft: '10px' }}>
                               {subspeciesList.map(ss => (
                                 <div key={ss.guid} style={{ padding: '4px 4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
-                                  <span style={{ color: '#666' }}>└─ <em>{ss.subspecies_name}</em></span>
+                                  {editingSubspecies === ss.guid ? (
+                                    <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleSaveEdit(ss.guid, 'subspecies')} autoFocus style={{ fontSize: '11px', padding: '2px 4px', width: '100px' }} />
+                                  ) : (
+                                    <span style={{ color: '#666', cursor: 'pointer' }} onDoubleClick={() => handleEditSubspecies(ss)} title="Двойной клик для редактирования">└─ <em>{ss.subspecies_name}</em></span>
+                                  )}
                                   <IconButton icon="Delete" onClick={() => handleDelete(ss.guid, 'subspecies')} style={{ color: '#e74c3c', padding: '2px' }} />
                                 </div>
                               ))}
@@ -265,15 +266,7 @@ const TaxonManager = ({ onClose, onUpdate }) => {
                           
                           {isAddingSubspecies && (
                             <div style={{ marginTop: '8px', marginBottom: '8px', padding: '8px', background: '#f9f9f9', borderRadius: '4px', display: 'flex', gap: '8px', alignItems: 'center', marginLeft: '20px' }}>
-                              <input
-                                type="text"
-                                placeholder="Название подвида"
-                                value={newSubspeciesName}
-                                onChange={(e) => setNewSubspeciesName(e.target.value)}
-                                onKeyPress={(e) => e.key === 'Enter' && handleAddSubspecies(species.guid)}
-                                style={{ flex: 1, padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }}
-                                autoFocus
-                              />
+                              <input type="text" placeholder="Название подвида" value={newSubspeciesName} onChange={(e) => setNewSubspeciesName(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddSubspecies(species.guid)} style={{ flex: 1, padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} autoFocus />
                               <IconButton icon="Save" onClick={() => handleAddSubspecies(species.guid)} style={{ background: '#27ae60', color: 'white', padding: '4px 8px' }} />
                               <IconButton icon="Close" onClick={() => setShowAddSubspecies(null)} style={{ background: '#95a5a6', color: 'white', padding: '4px 8px' }} />
                             </div>

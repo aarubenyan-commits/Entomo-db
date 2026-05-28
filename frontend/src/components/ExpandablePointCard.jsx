@@ -212,53 +212,108 @@ const ExpandablePointCard = ({ point, isSelected, isHighlighted, onSelect, onHig
     }
   };
   
-  // В функции handleSave для новой точки (isNew === true)
-const handleSave = async () => {
-  setLoading(true);
-  try {
-    if (isNew) {
-      const payload = {
-        location_original: formData.location_original,
-        latitude: latitude,
-        longitude: longitude,
-        date_text: formData.date_text,
-        collectors: formData.collectors,  // <-- ВАЖНО: передаём массив сборщиков
-      };
-      
-      const response = await axios.post(`${API_URL}/points/create`, payload);
-      const newPointGuid = response.data.guid;
-      
-      // Таксоны с порядком
-      for (let i = 0; i < formData.taxa.length; i++) {
-        const taxon = formData.taxa[i];
-        await axios.post(`${API_URL}/point_taxa/${newPointGuid}/${taxon.guid}?sort_order=${i}`);
+  const handleSave = async () => {
+    setLoading(true);
+    try {
+      if (isNew) {
+        const payload = {
+          location_original: formData.location_original,
+          latitude: latitude,
+          longitude: longitude,
+          date_text: formData.date_text,
+          collectors: formData.collectors,
+        };
+        
+        const response = await axios.post(`${API_URL}/points/create`, payload);
+        const newPointGuid = response.data.guid;
+        
+        for (let i = 0; i < formData.taxa.length; i++) {
+          const taxon = formData.taxa[i];
+          await axios.post(`${API_URL}/point_taxa/${newPointGuid}/${taxon.guid}?sort_order=${i}`);
+        }
+        
+        for (const study of selectedStudies) {
+          await axios.post(`${API_URL}/source/point/${newPointGuid}/${study.value}`);
+        }
+        
+        if (onUpdate) onUpdate(newPointGuid, true);
+        // СХЛОПЫВАЕМ после сохранения новой точки
+        setExpanded(false);
+      } else {
+        await axios.put(`${API_URL}/points/${point.guid}`, {
+          location_original: formData.location_original,
+          latitude: latitude,
+          longitude: longitude,
+          date_text: formData.date_text,
+          collectors: formData.collectors,
+        });
+        
+        const existingCollectors = collectors.map(c => c.guid);
+        const newCollectors = formData.collectors.map(c => c.guid);
+        
+        for (const oldGuid of existingCollectors) {
+          if (!newCollectors.includes(oldGuid)) {
+            const linksRes = await axios.get(`${API_URL}/objects/point/${point.guid}/links`);
+            const linkToRemove = linksRes.data.find(l => 
+              l.relation_type === 'collected_at' && l.target_guid === oldGuid
+            );
+            if (linkToRemove) {
+              await axios.delete(`${API_URL}/source/${linkToRemove.link_guid}`);
+            }
+          }
+        }
+        
+        for (const newGuid of newCollectors) {
+          if (!existingCollectors.includes(newGuid)) {
+            await axios.post(`${API_URL}/source/person/${newGuid}/${point.guid}`);
+          }
+        }
+        
+        const existingTaxa = (point.taxa || []).map(t => t.guid);
+        const newTaxa = formData.taxa.map(t => t.guid);
+        
+        for (let i = 0; i < formData.taxa.length; i++) {
+          const taxon = formData.taxa[i];
+          if (!existingTaxa.includes(taxon.guid)) {
+            await axios.post(`${API_URL}/point_taxa/${point.guid}/${taxon.guid}?sort_order=${i}`);
+          } else {
+            await axios.put(`${API_URL}/point_taxa/${point.guid}/${taxon.guid}?sort_order=${i}`);
+          }
+        }
+        
+        const existingStudyGuids = existingStudies.map(s => s.guid);
+        const newStudyGuids = selectedStudies.map(s => s.value);
+        
+        for (const oldGuid of existingStudyGuids) {
+          if (!newStudyGuids.includes(oldGuid)) {
+            const linksRes = await axios.get(`${API_URL}/objects/point/${point.guid}/links`);
+            const linkToRemove = linksRes.data.find(l => 
+              l.relation_type === 'source' && l.target_guid === oldGuid
+            );
+            if (linkToRemove) {
+              await axios.delete(`${API_URL}/source/${linkToRemove.link_guid}`);
+            }
+          }
+        }
+        
+        for (const newStudy of selectedStudies) {
+          if (!existingStudyGuids.includes(newStudy.value)) {
+            await axios.post(`${API_URL}/source/point/${point.guid}/${newStudy.value}`);
+          }
+        }
+        
+        if (onUpdate) onUpdate(point.guid, true);
+        // СХЛОПЫВАЕМ после сохранения существующей точки
+        setExpanded(false);
       }
-      
-      // Исследования
-      for (const study of selectedStudies) {
-        await axios.post(`${API_URL}/source/point/${newPointGuid}/${study.value}`);
-      }
-      
-      if (onUpdate) onUpdate(newPointGuid, true);
-    } else {
-      // Существующая точка - аналогично обновляем collectors
-      await axios.put(`${API_URL}/points/${point.guid}`, {
-        location_original: formData.location_original,
-        latitude: latitude,
-        longitude: longitude,
-        date_text: formData.date_text,
-        collectors: formData.collectors,
-      });
-      
-      // ... остальной код для таксонов и исследований ...
+    } catch (error) {
+      console.error('Ошибка сохранения:', error);
+      alert('Ошибка сохранения: ' + (error.response?.data?.detail || error.message));
+    } finally {
+      setLoading(false);
     }
-  } catch (error) {
-    console.error('Ошибка сохранения:', error);
-    alert('Ошибка сохранения: ' + (error.response?.data?.detail || error.message));
-  } finally {
-    setLoading(false);
-  }
-};
+  };
+  
   const handleCancel = () => {
     if (isNew) {
       if (onCancel) {
@@ -267,6 +322,7 @@ const handleSave = async () => {
         if (onUpdate) onUpdate(null, false);
       }
     } else {
+      // СХЛОПЫВАЕМ при отмене редактирования
       setExpanded(false);
     }
   };
@@ -673,7 +729,7 @@ const handleSave = async () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #dee2e6' }}>
             <button onClick={handleDelete} style={{ padding: '4px 12px', background: '#f8f9fa', border: '1px solid #dee2e6', borderRadius: '4px', cursor: 'pointer', fontSize: '10px', color: '#6c757d' }}>🗑️ Удалить</button>
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={() => setExpanded(false)} style={{ padding: '4px 12px', background: '#e9ecef', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '10px' }}>Отмена</button>
+              <button onClick={handleCancel} style={{ padding: '4px 12px', background: '#e9ecef', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '10px' }}>Отмена</button>
               <button onClick={handleSave} disabled={loading} style={{ padding: '4px 16px', background: '#27ae60', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '10px' }}>{loading ? '...' : '💾 Сохранить'}</button>
             </div>
           </div>
